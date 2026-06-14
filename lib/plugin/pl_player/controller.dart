@@ -902,7 +902,7 @@ class PlPlayerController with BlockConfigMixin {
       player,
       configuration: VideoControllerConfiguration(
         enableHardwareAcceleration: hwdec != null,
-        androidAttachSurfaceAfterVideoParameters: false,
+        androidAttachSurfaceAfterVideoParameters: Platform.isAndroid,
         hwdec: hwdec,
       ),
     );
