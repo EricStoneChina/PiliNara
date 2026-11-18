@@ -1,19 +1,15 @@
-name: Android Debug Build
+name: PiliNara Baseline Verification
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "**.md"
   workflow_dispatch:
-    # 允许手动触发构建
+
+permissions:
+  contents: read
 
 jobs:
   android-debug:
     name: Build Debug APK
     runs-on: ubuntu-latest
-    permissions: write-all
-
     steps:
       - name: 代码迁出
         uses: actions/checkout@v4
@@ -37,34 +33,15 @@ jobs:
           flutter-version-file: pubspec.yaml
           cache: true
 
-      # 保留你原有的 Patch 逻辑
-      - name: revert new overscrollindicator
-        working-directory: ${{ env.FLUTTER_ROOT }}
-        run: |
-          git config --global user.name "ci"
-          git config --global user.email "example@example.com"
-          git stash || true
-          git revert 362b1de29974ffc1ed6faa826e1df870d7bec75f --no-edit
-          git reset --soft HEAD~1
-          git stash pop || true
-        continue-on-error: true
-
-      - name: apply patches
-        working-directory: ${{ env.FLUTTER_ROOT }}
-        run: |
-          git apply $GITHUB_WORKSPACE/lib/scripts/bottom_sheet_patch.diff || true
-          git apply $GITHUB_WORKSPACE/lib/scripts/modal_barrier_patch.diff || true
-          git apply $GITHUB_WORKSPACE/lib/scripts/mouse_cursor_patch.diff || true
-
-      - name: Set and Extract version
+      - name: Apply patches
         shell: pwsh
-        run: lib/scripts/build.ps1 android
+        run: lib/scripts/patch.ps1 android
 
       # 核心修改点：使用 --debug 模式
       # 注意：Debug 模式下通常不使用 --split-per-abi，因为它会生成一个包含全架构的胖 APK
       - name: Flutter Build Debug APK
         run: |
-          flutter build apk --debug --dart-define-from-file=pili_release.json --pub
+          flutter build apk --debug --no-pub
 
       - name: Rename Debug APK
         run: |
@@ -77,6 +54,33 @@ jobs:
       - name: 上传 Debug 产物
         uses: actions/upload-artifact@v7
         with:
-          archive: false
           name: Android_Debug_APK
           path: output/PiliNara_android_debug_all.apk
+          if-no-files-found: error
+
+  windows-debug:
+    name: Windows x64 Debug
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+      - name: Apply patches
+        shell: pwsh
+        run: lib/scripts/patch.ps1 windows
+      - name: Static analysis
+        run: flutter analyze --no-pub
+        continue-on-error: true
+      - name: Automated tests
+        run: flutter test --no-pub --reporter expanded
+        continue-on-error: true
+      - name: Build Windows debug package
+        run: flutter build windows --debug --no-pub
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Windows-x64-debug
+          path: build/windows/x64/runner/Debug/
+          if-no-files-found: error
