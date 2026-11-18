@@ -152,7 +152,7 @@ jobs:
             package=$("$analyzer" manifest application-id "$apk");
             printf "APK package: %s\n" "$package";
             adb install -g "$apk";
-            launch=$(adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$package");
+            launch=$(adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n "$package/com.example.pilinara.MainActivity") || { printf "%s\n" "$launch"; exit 1; };
             printf "%s\n" "$launch";
             grep -F "Status: ok" <<<"$launch";
             sleep 15;
