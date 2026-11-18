@@ -2,12 +2,18 @@ name: PiliNara Baseline Verification
 
 on:
   workflow_dispatch:
+    inputs:
+      smoke:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   android-debug:
+    if: ${{ !inputs.smoke }}
     name: Build Debug APK
     runs-on: ubuntu-latest
     steps:
@@ -59,6 +65,7 @@ jobs:
           if-no-files-found: error
 
   windows-debug:
+    if: ${{ !inputs.smoke }}
     name: Windows x64 Debug
     runs-on: windows-latest
     steps:
@@ -84,3 +91,63 @@ jobs:
           name: Windows-x64-debug
           path: build/windows/x64/runner/Debug/
           if-no-files-found: error
+
+  windows-smoke:
+    if: ${{ inputs.smoke }}
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: 44292757423
+          name: Windows-x64-debug
+          path: smoke-package
+      - name: Launch Windows package with a clean profile
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path smoke-package).Path
+          $app = Start-Process "$package/pilinara.exe" -WorkingDirectory $package -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+              Start-Sleep -Seconds 2
+              $app.Refresh()
+              if ($app.HasExited) { throw "App exited during startup: $($app.ExitCode)" }
+            } until ($app.MainWindowHandle -ne 0 -or (Get-Date) -ge $deadline)
+            if ($app.MainWindowHandle -eq 0) { throw 'The app did not create a main window' }
+            Write-Host "Main window: $($app.MainWindowTitle), PID: $($app.Id)"
+            Start-Sleep -Seconds 10
+            $app.Refresh()
+            if ($app.HasExited -or $app.MainWindowHandle -eq 0 -or !$app.Responding) {
+              throw 'The main window did not remain responsive'
+            }
+            Write-Host 'Windows startup smoke test passed'
+          } finally {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id }
+          }
+
+  android-smoke:
+    if: ${{ inputs.smoke }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: 44292757423
+          name: Android_Debug_APK
+          path: smoke-package
+      - name: Enable access to KVM
+        run: sudo chmod a+rw /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: |
+            adb install smoke-package/PiliNara_android_debug_all.apk
+            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.example.pilinara.debug
+            sleep 15
+            adb shell pidof com.example.pilinara.debug
+            adb shell dumpsys activity activities | grep -E '(mResumedActivity|topResumedActivity).*com\.example\.pilinara\.debug/'
