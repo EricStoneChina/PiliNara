@@ -9,8 +9,8 @@ import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/grid.dart';
 import 'package:PiliPlus/utils/request_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class FavSearchPage extends StatefulWidget {
   const FavSearchPage({super.key});
@@ -21,11 +21,8 @@ class FavSearchPage extends StatefulWidget {
 
 class _FavSearchPageState
     extends
-        CommonSearchPageState<
-          FavSearchPage,
-          FavDetailData,
-          FavDetailItemModel
-        > {
+        CommonSearchPageState<FavSearchPage, FavDetailData, FavDetailItemModel>
+    with GridMixin {
   @override
   final FavSearchController controller = Get.put(
     FavSearchController(),
@@ -88,8 +85,6 @@ class _FavSearchPageState
       },
     ),
   ];
-
-  late final gridDelegate = Grid.videoCardHDelegate(context, minHeight: 110);
 
   @override
   Widget buildList(List<FavDetailItemModel> list) {

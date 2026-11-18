@@ -24,7 +24,6 @@ import 'package:PiliPlus/common/widgets/image_grid/image_grid_view.dart'
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/gestures.dart'
     show TapGestureRecognizer, LongPressGestureRecognizer;
-import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show
         ContainerRenderObjectMixin,
@@ -37,7 +36,10 @@ import 'package:flutter/rendering.dart'
         BoxHitTestEntry,
         ContainerParentDataMixin,
         InformationCollector,
-        DiagnosticsDebugCreator;
+        DiagnosticsDebugCreator,
+        RenderObjectVisitor,
+        SemanticsConfiguration;
+import 'package:material_ui/material_ui.dart';
 
 /// ref [LayoutBuilder]
 
@@ -251,6 +253,23 @@ class RenderImageGrid extends RenderBox
   }
 
   @override
+  void visitChildrenForSemantics(RenderObjectVisitor visitor) {
+    RenderBox? child = firstChild;
+    while (child != null) {
+      visitor(child);
+      child = (child.parentData as MultiChildLayoutParentData).nextSibling;
+    }
+  }
+
+  @override
+  void describeSemanticsConfiguration(SemanticsConfiguration config) {
+    super.describeSemanticsConfiguration(config);
+    config
+      ..explicitChildNodes = true
+      ..isSemanticBoundary = true;
+  }
+
+  @override
   bool get isRepaintBoundary => true; // gif repaint
 }
 
@@ -460,8 +479,7 @@ class ImageGridRenderObjectElement extends RenderObjectElement {
     // configuration, or an inherited widget.
     renderObject.scheduleLayoutCallback();
     _needsBuild = true;
-    super
-        .performRebuild(); // Calls widget.updateRenderObject (a no-op in this case).
+    super.performRebuild(); // Calls widget.updateRenderObject (a no-op in this case).
   }
 
   @override
@@ -480,7 +498,7 @@ class ImageGridRenderObjectElement extends RenderObjectElement {
     List<ImageModel> picArr,
     BoxConstraints layoutInfo,
   ) {
-    final maxWidth = layoutInfo.maxWidth;
+    final maxWidth = math.min(525.0, layoutInfo.maxWidth);
     double imageWidth;
     double imageHeight;
     final length = picArr.length;

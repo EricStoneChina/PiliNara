@@ -1,14 +1,23 @@
-import 'dart:io' show Platform, Process;
-
+import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/flutter/popup_menu.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
+import 'package:PiliPlus/models_new/download/download_info.dart';
+import 'package:PiliPlus/models_new/sponsor_block/segment_item.dart';
+import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
+import 'package:PiliPlus/models_new/video/video_play_info/view_point.dart';
 import 'package:PiliPlus/pages/common/multi_select/base.dart'
     show MultiSelectData;
 import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:PiliPlus/utils/utils.dart';
 import 'package:get/route_manager.dart';
+import 'package:material_ui/material_ui.dart';
+
+int downloadEntrySort(BiliDownloadEntryInfo a, BiliDownloadEntryInfo b) {
+  return a.sortKey.compareTo(b.sortKey);
+}
 
 class BiliDownloadEntryInfo with MultiSelectData {
   int mediaType;
@@ -21,6 +30,9 @@ class BiliDownloadEntryInfo with MultiSelectData {
   final String cover;
   int? videoQuality;
   int preferedVideoQuality;
+
+  /// 缓存时选择的音质，null 表示跟随设置中的默认音质
+  int? preferedAudioQuality;
   String qualityPithyDescription;
   final int guessedTotalBytes;
   int totalTimeMilli;
@@ -35,11 +47,13 @@ class BiliDownloadEntryInfo with MultiSelectData {
   final int? ownerId;
   final String? ownerName;
   PageInfo? pageData;
-  final String? seasonId;
+  final String? seasonId; // pgc
   final SourceInfo? source;
   EpInfo? ep;
-  final String? autoFolderTitle;
-  final String? autoFolderSourceKey;
+  List<SegmentItemModel>? segments;
+  SeasonInfo? seasonInfo;
+  List<Subtitle>? subtitles;
+  List<ViewPoint>? viewPoints;
 
   late String pageDirPath;
   late String entryDirPath;
@@ -49,7 +63,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
 
   String get pageId => seasonId ?? avid.toString();
 
-  int get sortKey => ep?.sortIndex ?? pageData!.cid;
+  int get sortKey => ep?.sortIndex ?? pageData!.page;
 
   String get showTitle {
     if (pageData case PageInfo(:final part)) {
@@ -61,7 +75,33 @@ class BiliDownloadEntryInfo with MultiSelectData {
     return title;
   }
 
-  Widget moreBtn(ColorScheme colorScheme) => SizedBox(
+  Widget get qaBadge => PBadge(
+    text: videoQuality != null
+        ? VideoQuality.safeFromCode(videoQuality!)?.shortDesc ??
+              qualityPithyDescription
+        : qualityPithyDescription,
+    right: 6.0,
+    top: 6.0,
+    type: .gray,
+  );
+
+  DownloadPageInfo toDownloadPageInfo(String pageId, {int? sortKey}) =>
+      DownloadPageInfo(
+        pageId: pageId,
+        dirPath: pageDirPath,
+        title: title,
+        cover: cover,
+        sortKey: sortKey ?? this.sortKey,
+        seasonType: ep?.seasonType,
+        entries: [this],
+      );
+
+  /// 条目菜单；[extraItemsBuilder] 让分组卡片追加自己的动作（导出整组、加入
+  /// 文件夹），模型本身不认识文件夹与导出流程。
+  Widget moreBtn(
+    ColorScheme colorScheme, {
+    List<PopupMenuEntry<void>> Function(BuildContext context)? extraItemsBuilder,
+  }) => SizedBox(
     width: 29,
     height: 29,
     child: Builder(
@@ -77,7 +117,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
           showStaticPositionMenu<void>(
             context: context,
             items: [
-              PopupMenuItem(
+              CustomPopupMenuItem<void>(
                 height: 38,
                 child: const Text('查看详情页', style: TextStyle(fontSize: 13)),
                 onTap: () {
@@ -107,32 +147,25 @@ class BiliDownloadEntryInfo with MultiSelectData {
                 },
               ),
               if (PlatformUtils.isDesktop)
-                PopupMenuItem(
+                CustomPopupMenuItem<void>(
                   height: 38,
                   child: const Text(
                     '打开本地文件夹',
                     style: TextStyle(fontSize: 13),
                   ),
-                  onTap: () async {
-                    try {
-                      final String executable;
-                      if (Platform.isWindows) {
-                        executable = 'explorer';
-                      } else if (Platform.isMacOS) {
-                        executable = 'open';
-                      } else if (Platform.isLinux) {
-                        executable = 'xdg-open';
-                      } else {
-                        throw UnimplementedError();
-                      }
-                      await Process.run(executable, [entryDirPath]);
-                    } catch (e) {
-                      SmartDialog.showToast(e.toString());
-                    }
-                  },
+                  onTap: () => PathUtils.openDir(entryDirPath),
+                )
+              else
+                CustomPopupMenuItem<void>(
+                  height: 38,
+                  child: const Text(
+                    '复制缓存路径',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  onTap: () => Utils.copyText(entryDirPath),
                 ),
               if (ownerId case final mid?)
-                PopupMenuItem(
+                CustomPopupMenuItem<void>(
                   height: 38,
                   child: Text(
                     '访问${ownerName != null ? '：$ownerName' : '用户主页'}',
@@ -140,6 +173,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
                   ),
                   onTap: () => Get.toNamed('/member?mid=$mid'),
                 ),
+              ...?extraItemsBuilder?.call(context),
             ],
           );
         },
@@ -158,6 +192,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     required this.cover,
     this.videoQuality,
     required this.preferedVideoQuality,
+    this.preferedAudioQuality,
     this.qualityPithyDescription = '',
     required this.guessedTotalBytes,
     required this.totalTimeMilli,
@@ -175,49 +210,59 @@ class BiliDownloadEntryInfo with MultiSelectData {
     this.seasonId,
     this.source,
     this.ep,
-    this.autoFolderTitle,
-    this.autoFolderSourceKey,
+    this.segments,
+    this.seasonInfo,
+    this.subtitles,
+    this.viewPoints,
   });
 
-  factory BiliDownloadEntryInfo.fromJson(Map<String, dynamic> json) =>
-      BiliDownloadEntryInfo(
-        mediaType: json['media_type'] as int,
-        hasDashAudio: json['has_dash_audio'] as bool,
-        isCompleted: json['is_completed'] as bool,
-        totalBytes: json['total_bytes'] as int,
-        downloadedBytes: json['downloaded_bytes'] as int,
-        title: json['title'] as String,
-        typeTag: json['type_tag'] as String?,
-        cover: json['cover'] as String,
-        videoQuality: json['video_quality'] as int?,
-        preferedVideoQuality: json['prefered_video_quality'] as int,
-        qualityPithyDescription: json['quality_pithy_description'] as String,
-        guessedTotalBytes: json['guessed_total_bytes'] as int,
-        totalTimeMilli: json['total_time_milli'] as int,
-        danmakuCount: json['danmaku_count'] as int,
-        timeUpdateStamp: json['time_update_stamp'] as int,
-        timeCreateStamp: json['time_create_stamp'] as int,
-        canPlayInAdvance: json['can_play_in_advance'] as bool,
-        interruptTransformTempFile:
-            json['interrupt_transform_temp_file'] as bool,
-        avid: json['avid'] as int,
-        spid: json['spid'] as int?,
-        bvid: json['bvid'] as String,
-        ownerId: json['owner_id'] as int?,
-        ownerName: json['owner_name'] as String?,
-        pageData: json['page_data'] != null
-            ? PageInfo.fromJson(json['page_data'] as Map<String, dynamic>)
-            : null,
-        seasonId: json['season_id'] as String?,
-        source: json['source'] != null
-            ? SourceInfo.fromJson(json['source'] as Map<String, dynamic>)
-            : null,
-        ep: json['ep'] != null
-            ? EpInfo.fromJson(json['ep'] as Map<String, dynamic>)
-            : null,
-        autoFolderTitle: json['auto_folder_title'] as String?,
-        autoFolderSourceKey: json['auto_folder_source_key'] as String?,
-      );
+  factory BiliDownloadEntryInfo.fromJson(
+    Map<String, dynamic> json,
+    String entryDirPath,
+  ) => BiliDownloadEntryInfo(
+    mediaType: json['media_type'] as int,
+    hasDashAudio: json['has_dash_audio'] as bool,
+    isCompleted: json['is_completed'] as bool,
+    totalBytes: json['total_bytes'] as int,
+    downloadedBytes: json['downloaded_bytes'] as int,
+    title: json['title'] as String,
+    typeTag: json['type_tag'] as String?,
+    cover: json['cover'] as String,
+    videoQuality: json['video_quality'] as int?,
+    preferedVideoQuality: json['prefered_video_quality'] as int,
+    preferedAudioQuality: json['prefered_audio_quality'] as int?,
+    qualityPithyDescription: json['quality_pithy_description'] as String,
+    guessedTotalBytes: json['guessed_total_bytes'] as int,
+    totalTimeMilli: json['total_time_milli'] as int,
+    danmakuCount: json['danmaku_count'] as int,
+    timeUpdateStamp: json['time_update_stamp'] as int,
+    timeCreateStamp: json['time_create_stamp'] as int,
+    canPlayInAdvance: json['can_play_in_advance'] as bool,
+    interruptTransformTempFile: json['interrupt_transform_temp_file'] as bool,
+    avid: json['avid'] as int,
+    spid: json['spid'] as int?,
+    bvid: json['bvid'] as String,
+    ownerId: json['owner_id'] as int?,
+    ownerName: json['owner_name'] as String?,
+    pageData: json['page_data'] != null
+        ? PageInfo.fromJson(json['page_data'] as Map<String, dynamic>)
+        : null,
+    seasonId: json['season_id'] is int
+        ? json['season_id'].toString()
+        : json['season_id'] as String?,
+    source: json['source'] != null
+        ? SourceInfo.fromJson(json['source'] as Map<String, dynamic>)
+        : null,
+    ep: json['ep'] != null
+        ? EpInfo.fromJson(json['ep'] as Map<String, dynamic>)
+        : null,
+    segments: SegmentItemModel.fromCache(json['segments']),
+    seasonInfo: json['season_info'] != null
+        ? SeasonInfo.fromJson(json['season_info'] as Map<String, dynamic>)
+        : null,
+    subtitles: LocalSubtitle.fromCache(json['subtitles'], entryDirPath),
+    viewPoints: ViewPoint.fromCache(json['view_points']),
+  );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     'media_type': mediaType,
@@ -230,6 +275,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     'cover': cover,
     'video_quality': ?videoQuality,
     'prefered_video_quality': preferedVideoQuality,
+    'prefered_audio_quality': ?preferedAudioQuality,
     'quality_pithy_description': qualityPithyDescription,
     'guessed_total_bytes': guessedTotalBytes,
     'total_time_milli': totalTimeMilli,
@@ -247,8 +293,10 @@ class BiliDownloadEntryInfo with MultiSelectData {
     'season_id': ?seasonId,
     'source': ?source?.toJson(),
     'ep': ?ep?.toJson(),
-    'auto_folder_title': ?autoFolderTitle,
-    'auto_folder_source_key': ?autoFolderSourceKey,
+    'segments': ?segments?.map((e) => e.toJson()).toList(),
+    'season_info': ?seasonInfo?.toJson(),
+    'subtitles': ?subtitles?.map((e) => e.toJson()).toList(),
+    'view_points': ?viewPoints?.map((e) => e.toJson()).toList(),
   };
 
   @override
@@ -264,6 +312,56 @@ class BiliDownloadEntryInfo with MultiSelectData {
 
   @override
   int get hashCode => cid.hashCode;
+}
+
+class SeasonInfo {
+  final int index;
+  final int id;
+  final String title;
+  final String cover;
+  final int mid;
+  final String uname;
+
+  SeasonInfo({
+    required this.index,
+    required this.id,
+    required this.title,
+    required this.cover,
+    required this.mid,
+    required this.uname,
+  });
+
+  factory SeasonInfo.fromJson(Map<String, dynamic> json) => SeasonInfo(
+    index: json['index'] as int,
+    id: json['id'] as int,
+    title: json['title'] as String,
+    cover: json['cover'] as String,
+    mid: json['mid'] as int,
+    uname: json['uname'] as String,
+  );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'index': index,
+    'id': id,
+    'title': title,
+    'cover': cover,
+    'mid': mid,
+    'uname': uname,
+  };
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other is SeasonInfo) {
+      return id == other.id;
+    }
+    return false;
+  }
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 class PageInfo {

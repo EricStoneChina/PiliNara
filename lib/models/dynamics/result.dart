@@ -8,6 +8,7 @@ import 'package:PiliPlus/models/model_owner.dart';
 import 'package:PiliPlus/models_new/live/live_feed_index/watched_show.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/global_data.dart';
+import 'package:PiliPlus/utils/parse_bool.dart';
 import 'package:PiliPlus/utils/parse_int.dart';
 import 'package:PiliPlus/utils/parse_string.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -39,15 +40,13 @@ class DynamicsDataModel {
     return title ?? '';
   }
 
-  static RegExp banWordForDyn = RegExp(
-    Pref.parseBanWordToRegex(Pref.banWordForDyn),
-    caseSensitive: false,
-  );
-  static bool enableFilter = banWordForDyn.pattern.isNotEmpty;
+  static List<RegExp> banWordForDyn = Pref.compileBanWord(Pref.banWordForDyn);
+  static bool enableFilter = banWordForDyn.isNotEmpty;
 
   static bool antiGoodsDyn = Pref.antiGoodsDyn;
   static bool removeBlockedDyn = Pref.removeBlockedDyn;
   static bool removeOnlyFansVideoDyn = Pref.removeOnlyFansVideoDyn;
+  static bool removeDynVideoDyn = Pref.removeDynVideoDyn;
   static Set<int> dynamicsBlockedMids = Pref.dynamicsBlockedMids;
 
   DynamicsDataModel.fromJson(
@@ -64,9 +63,15 @@ class DynamicsDataModel {
           type != DynamicsTabType.up && tempBannedList?.isNotEmpty == true;
       late final filterBlockedUsers =
           type != DynamicsTabType.up && dynamicsBlockedMids.isNotEmpty;
+      late final filterDynVideo =
+          type != DynamicsTabType.up && removeDynVideoDyn;
       final whitelistMids = GlobalData().whitelistMids;
       for (final e in list) {
         DynamicItemModel item = DynamicItemModel.fromJson(e);
+        if (filterBlockedUsers &&
+            dynamicsBlockedMids.contains(item.modules.moduleAuthor?.mid)) {
+          continue;
+        }
         if (whitelistMids.containsKey(item.modules.moduleAuthor?.mid)) {
           items!.add(item);
           continue;
@@ -79,6 +84,9 @@ class DynamicsDataModel {
         if (removeOnlyFansVideoDyn &&
             (item.hasOnlyFansVideoBadge ||
                 (item.orig?.hasOnlyFansVideoBadge ?? false))) {
+          continue;
+        }
+        if (filterDynVideo && item.hasDynVideoBadge) {
           continue;
         }
         if (antiGoodsDyn &&
@@ -100,10 +108,6 @@ class DynamicsDataModel {
         }
         if (filterBan &&
             tempBannedList!.contains(item.modules.moduleAuthor?.mid)) {
-          continue;
-        }
-        if (filterBlockedUsers &&
-            dynamicsBlockedMids.contains(item.modules.moduleAuthor?.mid)) {
           continue;
         }
         items!.add(item);
@@ -163,13 +167,16 @@ class DynamicItemModel {
 
   bool get hasNoPrivilegeDynamic =>
       (basic?.isOnlyFans ?? false) &&
-          modules.moduleDynamic?.major?.type == 'MAJOR_TYPE_BLOCKED' &&
-          modules.moduleDynamic?.major?.blocked != null;
+      modules.moduleDynamic?.major?.type == 'MAJOR_TYPE_BLOCKED' &&
+      modules.moduleDynamic?.major?.blocked != null;
 
   bool get hasOnlyFansVideoBadge =>
       (basic?.isOnlyFans ?? false) &&
       type == 'DYNAMIC_TYPE_AV' &&
       modules.moduleDynamic?.major?.archive?.badge?.text == '充电专属';
+
+  bool get hasDynVideoBadge =>
+      modules.moduleDynamic?.major?.archive?.badge?.text == '动态视频';
 }
 
 class Fallback {
@@ -205,6 +212,7 @@ class ItemModulesModel {
   List<ArticleContentModel>? moduleContent;
   ModuleBlocked? moduleBlocked;
   ModuleFold? moduleFold;
+  ModuleTribee? moduleTribee;
 
   static bool showDynDispute = Pref.showDynDispute;
   static bool showDynInteraction = Pref.showDynInteraction;
@@ -280,8 +288,41 @@ class ItemModulesModel {
               ? null
               : ModuleStatModel.fromJson(i['module_stat']);
           break;
+        case 'MODULE_TYPE_TRIBEE':
+          moduleTribee = i['module_tribee'] == null
+              ? null
+              : ModuleTribee.fromJson(i['module_tribee']);
+          break;
       }
     }
+  }
+}
+
+class ModuleTribee {
+  List<Tribee>? items;
+
+  ModuleTribee.fromJson(Map<String, dynamic> json) {
+    items = (json['items'] as List?)?.map((e) => Tribee.fromJson(e)).toList();
+  }
+}
+
+class Tribee {
+  String? tribeeId;
+  String? name;
+  String? suffix;
+  String? faceUrl;
+  String? jumpUrl;
+  String? dynCountText;
+  String? latestTimeText;
+
+  Tribee.fromJson(Map<String, dynamic> json) {
+    tribeeId = json['tribee_id'];
+    name = json['name'];
+    suffix = json['suffix'];
+    faceUrl = json['face_url'];
+    jumpUrl = json['jump_url'];
+    dynCountText = json['dyn_count_text'];
+    latestTimeText = json['latest_time_text'];
   }
 }
 
@@ -433,6 +474,18 @@ class Basic {
   String? ridStr;
   bool? isOnlyFans;
 
+  ({int oid, int replyType})? get replyInfo {
+    if (commentIdStr != null && commentType != null) {
+      try {
+        return (
+          oid: int.parse(commentIdStr!),
+          replyType: commentType!,
+        );
+      } catch (_) {}
+    }
+    return null;
+  }
+
   Basic.fromJson(Map<String, dynamic> json) {
     commentIdStr = json['comment_id_str'];
     commentType = safeToInt(json['comment_type']);
@@ -456,13 +509,16 @@ class ModuleAuthorModel extends Avatar {
       officialVerify ??= BaseOfficialVerify.fromJson(json['official']); // opus
     }
     pubAction = json['pub_action'];
-    pubTime = json['pub_time'];
-    pubTs = json['pub_ts'] == 0 ? null : safeToInt(json['pub_ts']);
+    pubTime = nonNullOrEmptyString(json['pub_time']);
+    if (safeToInt(json['pub_ts']) case final pubTs? when pubTs > 0) {
+      this.pubTs = pubTs;
+    }
     type = json['type'];
     if (PendantAvatar.showDecorate) {
-      decorate = json['decorate'] == null
-          ? null
-          : Decorate.fromJson(json['decorate']);
+      final decorate = json['decorate'] ?? json['decoration_card'];
+      if (decorate != null) {
+        this.decorate = Decorate.fromJson(decorate);
+      }
     } else {
       pendant = null;
     }
@@ -497,7 +553,7 @@ class Fan {
 
   factory Fan.fromJson(Map<String, dynamic> json) => Fan(
     color: json["color"],
-    numStr: json["num_str"],
+    numStr: json["num_str"] ?? json['num_desc'],
   );
 }
 
@@ -560,7 +616,10 @@ class DynamicAddModel {
     upowerLottery = json['upower_lottery'] != null
         ? UpowerLottery.fromJson(json['upower_lottery'])
         : null;
-    common = json['common'] != null ? AddCommon.fromJson(json['common']) : null;
+    final common = json['common'];
+    if (common != null && common['sub_type'] != 'game') {
+      this.common = AddCommon.fromJson(common);
+    }
     match = json['match'] != null ? AddMatch.fromJson(json['match']) : null;
   }
 }
@@ -1207,6 +1266,7 @@ class RichTextNodeItem {
 class Emoji {
   String? url;
   late num size;
+  String? jumpUrl;
 
   Emoji.fromJson(Map<String, dynamic> json) {
     url =
@@ -1214,6 +1274,7 @@ class Emoji {
         nonNullOrEmptyString(json['gif_url']) ??
         nonNullOrEmptyString(json['icon_url']);
     size = json['size'] ?? 1;
+    jumpUrl = json['jump_url'];
   }
 }
 
@@ -1375,8 +1436,10 @@ class DynamicStat {
   bool? status;
 
   DynamicStat.fromJson(Map<String, dynamic> json) {
-    count = json['count'] == 0 ? null : safeToInt(json['count']);
-    status = json['status'];
+    if (safeToInt(json['count']) case final count? when count >= 0) {
+      this.count = count;
+    }
+    status = safeToBool(json['status'], () => 'STATE_LIKE');
   }
 }
 

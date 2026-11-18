@@ -1,26 +1,26 @@
 import 'dart:io';
 
-import 'package:PiliPlus/models/common/video/audio_quality.dart';
-import 'package:PiliPlus/models/common/video/cdn_type.dart';
-import 'package:PiliPlus/models/common/video/live_quality.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
+import 'package:PiliPlus/pages/setting/widgets/cdn_node_dialog.dart';
+import 'package:PiliPlus/pages/setting/widgets/cdn_select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/ordered_multi_select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
 import 'package:PiliPlus/plugin/pl_player/models/audio_output_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/hwdec_type.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/utils/filtering_text.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 List<SettingsModel> get videoSettings => [
   const SwitchModel(
@@ -59,7 +59,7 @@ List<SettingsModel> get videoSettings => [
     title: 'CDN 设置',
     leading: const Icon(MdiIcons.cloudPlusOutline),
     getSubtitle: () =>
-        '当前使用：${VideoUtils.cdnService.desc}，部分 CDN 可能失效，如无法播放请尝试切换',
+        '当前使用：${VideoUtils.effectiveCdnDesc()}，部分 CDN 可能失效，如无法播放请尝试切换',
     onTap: _showCDNDialog,
   ),
   NormalModel(
@@ -90,9 +90,21 @@ List<SettingsModel> get videoSettings => [
       getSubtitle: () {
         final qa = Pref.defaultVideoQaHalfScreen;
         if (qa == null) {
-          return '跟随全屏默认画质（${VideoQuality.fromCode(Pref.defaultVideoQa).desc}）';
+          return '跟随全屏画质'
+              '（WiFi ${VideoQuality.fromCode(Pref.defaultVideoQa).desc}'
+              '｜蜂窝 ${VideoQuality.fromCode(Pref.defaultVideoQaCellular).desc}）';
         }
-        return '当前画质：${VideoQuality.fromCode(qa).desc}';
+        // 半屏实际画质 = min(半屏设置, 当前网络的全屏画质)，被夹持时提示实际值
+        final clamped = [
+          if (Pref.defaultVideoQa < qa)
+            'WiFi 下实际 ${VideoQuality.fromCode(Pref.defaultVideoQa).desc}',
+          if (Pref.defaultVideoQaCellular < qa)
+            '蜂窝下实际 ${VideoQuality.fromCode(Pref.defaultVideoQaCellular).desc}',
+        ];
+        final desc = VideoQuality.fromCode(qa).desc;
+        return clamped.isEmpty
+            ? '当前画质：$desc'
+            : '当前画质：$desc（${clamped.join('｜')}）';
       },
       onTap: _showVideoQaHalfScreenDialog,
     ),
@@ -127,29 +139,29 @@ List<SettingsModel> get videoSettings => [
   NormalModel(
     title: '直播默认画质',
     leading: const Icon(Icons.video_settings_outlined),
-    getSubtitle: () => '当前画质：${LiveQuality.fromCode(Pref.liveQuality)?.desc}',
+    getSubtitle: () => '当前画质：${LiveQuality.fromCode(Pref.liveQuality).desc}',
     onTap: _showLiveQaDialog,
   ),
   NormalModel(
     title: '蜂窝网络直播默认画质',
     leading: const Icon(Icons.video_settings_outlined),
     getSubtitle: () =>
-        '当前画质：${LiveQuality.fromCode(Pref.liveQualityCellular)?.desc}',
+        '当前画质：${LiveQuality.fromCode(Pref.liveQualityCellular).desc}',
     onTap: _showLiveCellularQaDialog,
   ),
   NormalModel(
     title: '首选解码格式',
     leading: const Icon(Icons.movie_creation_outlined),
     getSubtitle: () =>
-        '首选解码格式：${VideoDecodeFormatType.fromCode(Pref.defaultDecode).description}，请根据设备支持情况与需求调整',
-    onTap: _showDecodeDialog,
+        '首选解码格式：${(Pref.preferCodecs.map((i) => i.name).join(","))}，请根据设备支持情况与需求调整',
+    onTap: _showCodecsDialog,
   ),
   NormalModel(
-    title: '次选解码格式',
+    title: '蜂窝网络首选解码格式',
+    leading: const Icon(Icons.movie_creation_outlined),
     getSubtitle: () =>
-        '非杜比视频次选：${VideoDecodeFormatType.fromCode(Pref.secondDecode).description}，仍无则选择首个提供的解码格式',
-    leading: const Icon(Icons.swap_horizontal_circle_outlined),
-    onTap: _showSecondDecodeDialog,
+        '首选解码格式：${(Pref.preferCodecsCellular.map((i) => i.name).join(","))}，请根据设备支持情况与需求调整',
+    onTap: _showCellularCodecsDialog,
   ),
   if (kDebugMode || Platform.isAndroid)
     NormalModel(
@@ -170,12 +182,33 @@ List<SettingsModel> get videoSettings => [
       audioSessionHandler?.reconfigure();
     },
   ),
-  const SwitchModel(
-    title: '扩大缓冲区',
-    leading: Icon(Icons.storage_outlined),
-    subtitle: '默认缓冲区为视频4MB/直播16MB，开启后为32MB/64MB，加载时间变长',
-    setKey: SettingBoxKey.expandBuffer,
-    defaultVal: false,
+  NormalModel(
+    title: '缓冲大小',
+    leading: const Icon(Icons.storage_outlined),
+    getSubtitle: () =>
+        '当前：${Pref.bufferSize}MB。点播视频的前向和后向缓冲区大小（此选项即mpv的--demuxer-max-bytes，--demuxer-max-back-bytes）。直播流请设置下方的直播缓冲大小',
+    onTap: _showBufferSizeDialog,
+  ),
+  NormalModel(
+    title: '缓冲时长',
+    leading: const Icon(Icons.av_timer),
+    getSubtitle: () =>
+        '当前：${Pref.bufferSec}s。点播视频的实际缓冲为大小与时长二者的最小值（此选项即mpv的--cache-secs）。直播流该选项无效，请设置下方的直播缓冲时长',
+    onTap: _showBufferSecDialog,
+  ),
+  NormalModel(
+    title: '直播缓冲大小',
+    leading: const Icon(Icons.storage_outlined),
+    getSubtitle: () =>
+        '当前：${Pref.liveBufferSize > 0 ? '${Pref.liveBufferSize}MB' : '跟随缓冲大小（${(Pref.bufferSize * 2).toStringAsFixed(0)}MB）'}。仅对直播流生效，小于等于0时使用缓冲大小的2倍（此选项即mpv的--demuxer-max-bytes）',
+    onTap: _showLiveBufferSizeDialog,
+  ),
+  NormalModel(
+    title: '直播缓冲时长',
+    leading: const Icon(Icons.av_timer),
+    getSubtitle: () =>
+        '当前：${Pref.liveBufferSec > 0 ? '${Pref.liveBufferSec}s' : '不限制'}。仅对直播流生效，大于0时可限制直播缓冲时长以降低延迟（此选项即mpv的--cache-secs）',
+    onTap: _showLiveBufferSecDialog,
   ),
   NormalModel(
     title: '自动同步',
@@ -198,13 +231,12 @@ List<SettingsModel> get videoSettings => [
 ];
 
 Future<void> _showCDNDialog(BuildContext context, VoidCallback setState) async {
-  final res = await showDialog<CDNService>(
+  final res = await showDialog<CdnSelectResult>(
     context: context,
     builder: (context) => const CdnSelectDialog(),
   );
   if (res != null) {
-    VideoUtils.cdnService = res;
-    await GStorage.setting.put(SettingBoxKey.CDNService, res.name);
+    await applyCdnSelectResult(res);
     setState();
   }
 }
@@ -218,10 +250,30 @@ Future<void> _showLiveCDNDialog(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('输入CDN host'),
-      content: TextFormField(
-        initialValue: host,
-        autofocus: true,
-        onChanged: (value) => host = value,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextFormField(
+            initialValue: host,
+            autofocus: true,
+            onChanged: (value) => host = value,
+          ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            icon: const Icon(Icons.travel_explore_outlined, size: 18),
+            label: const Text('从节点列表选择'),
+            onPressed: () async {
+              final node = await showDialog<String>(
+                context: context,
+                builder: (context) => const CdnNodeDialog(isLive: true),
+              );
+              if (node != null && context.mounted) {
+                Navigator.pop(context, node);
+              }
+            },
+          ),
+        ],
       ),
       actions: [
         TextButton(
@@ -282,7 +334,7 @@ Future<void> _showVideoQaHalfScreenDialog(
       title: '半屏默认画质',
       value: currentQa ?? -1,
       values: [
-        (-1, '跟随全屏默认画质'),
+        (-1, '跟随全屏画质'),
         ...VideoQuality.values.map((e) => (e.code, e.desc)),
       ],
     ),
@@ -389,42 +441,44 @@ Future<void> _showLiveCellularQaDialog(
   }
 }
 
-Future<void> _showDecodeDialog(
+Future<void> _showCodecsDialog(
   BuildContext context,
   VoidCallback setState,
 ) async {
-  final res = await showDialog<String>(
+  final res = await showDialog<List<VideoDecodeFormatType>>(
     context: context,
-    builder: (context) => SelectDialog<String>(
-      title: '默认解码格式',
-      value: Pref.defaultDecode,
-      values: VideoDecodeFormatType.values
-          .map((e) => (e.codes.first, e.description))
-          .toList(),
+    builder: (context) => OrderedMultiSelectDialog<VideoDecodeFormatType>(
+      title: const Text('首选解码格式'),
+      initValues: Pref.preferCodecs,
+      values: {for (final e in VideoDecodeFormatType.values) e: e.name},
     ),
   );
-  if (res != null) {
-    await GStorage.setting.put(SettingBoxKey.defaultDecode, res);
+  if (res != null && res.isNotEmpty) {
+    await GStorage.setting.put(
+      SettingBoxKey.preferCodecs,
+      res.map((i) => i.name).toList(),
+    );
     setState();
   }
 }
 
-Future<void> _showSecondDecodeDialog(
+Future<void> _showCellularCodecsDialog(
   BuildContext context,
   VoidCallback setState,
 ) async {
-  final res = await showDialog<String>(
+  final res = await showDialog<List<VideoDecodeFormatType>>(
     context: context,
-    builder: (context) => SelectDialog<String>(
-      title: '次选解码格式',
-      value: Pref.secondDecode,
-      values: VideoDecodeFormatType.values
-          .map((e) => (e.codes.first, e.description))
-          .toList(),
+    builder: (context) => OrderedMultiSelectDialog<VideoDecodeFormatType>(
+      title: const Text('蜂窝网络首选解码格式'),
+      initValues: Pref.preferCodecsCellular,
+      values: {for (final e in VideoDecodeFormatType.values) e: e.name},
     ),
   );
-  if (res != null) {
-    await GStorage.setting.put(SettingBoxKey.secondDecode, res);
+  if (res != null && res.isNotEmpty) {
+    await GStorage.setting.put(
+      SettingBoxKey.preferCodecsCellular,
+      res.map((i) => i.name).toList(),
+    );
     setState();
   }
 }
@@ -436,7 +490,7 @@ Future<void> _showAudioOutputDialog(
   final res = await showDialog<List<String>>(
     context: context,
     builder: (context) => OrderedMultiSelectDialog<String>(
-      title: '音频输出设备',
+      title: const Text('音频输出设备'),
       initValues: Pref.audioOutput.split(','),
       values: {
         for (final e in AudioOutput.values) e.name: e.label,
@@ -487,7 +541,7 @@ Future<void> _showHwDecDialog(
   final res = await showDialog<List<String>>(
     context: context,
     builder: (context) => OrderedMultiSelectDialog<String>(
-      title: '硬解模式',
+      title: const Text('硬解模式'),
       initValues: Pref.hardwareDecoding.split(','),
       values: {
         for (final e in HwDecType.values) e.hwdec: '${e.hwdec}\n${e.desc}',
@@ -542,3 +596,90 @@ void _showAutoSyncDialog(BuildContext context, VoidCallback setState) {
     ),
   );
 }
+
+void _showDecimalDialog(
+  BuildContext context,
+  VoidCallback setState, {
+  required String key,
+  required double defVal,
+  required String title,
+  required String? suffix,
+}) {
+  String value = (GStorage.setting.get(key) ?? defVal).toString();
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: TextFormField(
+        autofocus: true,
+        initialValue: value,
+        keyboardType: const .numberWithOptions(decimal: true),
+        onChanged: (val) => value = val,
+        inputFormatters: FilteringText.decimal,
+        decoration: suffix == null ? null : InputDecoration(suffixText: suffix),
+      ),
+      actions: [
+        TextButton(
+          onPressed: Get.back,
+          child: Text(
+            '取消',
+            style: TextStyle(color: ColorScheme.of(context).outline),
+          ),
+        ),
+        TextButton(
+          onPressed: () async {
+            try {
+              final val = double.parse(value);
+              Get.back();
+              await GStorage.setting.put(key, val);
+              setState();
+            } catch (e) {
+              SmartDialog.showToast(e.toString());
+            }
+          },
+          child: const Text('确定'),
+        ),
+      ],
+    ),
+  );
+}
+
+void _showBufferSizeDialog(BuildContext context, VoidCallback setState) =>
+    _showDecimalDialog(
+      context,
+      setState,
+      key: SettingBoxKey.bufferSize,
+      defVal: Pref.bufferSize,
+      title: '缓冲大小',
+      suffix: 'MB',
+    );
+
+void _showBufferSecDialog(BuildContext context, VoidCallback setState) =>
+    _showDecimalDialog(
+      context,
+      setState,
+      key: SettingBoxKey.bufferSec,
+      defVal: Pref.bufferSec,
+      title: '缓冲时长',
+      suffix: 's',
+    );
+
+void _showLiveBufferSizeDialog(BuildContext context, VoidCallback setState) =>
+    _showDecimalDialog(
+      context,
+      setState,
+      key: SettingBoxKey.liveBufferSize,
+      defVal: Pref.liveBufferSize,
+      title: '直播缓冲大小',
+      suffix: 'MB',
+    );
+
+void _showLiveBufferSecDialog(BuildContext context, VoidCallback setState) =>
+    _showDecimalDialog(
+      context,
+      setState,
+      key: SettingBoxKey.liveBufferSec,
+      defVal: Pref.liveBufferSec,
+      title: '直播缓冲时长',
+      suffix: 's',
+    );

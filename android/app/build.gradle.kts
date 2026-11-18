@@ -7,9 +7,19 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val agpMajorVersion = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION
+    .substringBefore('.')
+    .toInt()
+val builtInKotlinProperty = providers.gradleProperty("android.builtInKotlin").orNull
+val isBuiltInKotlinEnabled = agpMajorVersion >= 9 &&
+        (builtInKotlinProperty == null || builtInKotlinProperty.toBoolean())
+if (!isBuiltInKotlinEnabled) {
+    apply(plugin = "org.jetbrains.kotlin.android")
+}
+
 android {
     namespace = "com.example.pilinara"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -20,7 +30,7 @@ android {
     defaultConfig {
         applicationId = "com.example.pilinara"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 37
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -60,13 +70,13 @@ android {
                 resValue(
                     type = "string",
                     name = "app_name",
-                    value = "PiliPlus dev",
+                    value = "PiliNara dev",
                 )
             }
-//            proguardFiles(
-//                getDefaultProguardFile("proguard-android-optimize.txt"),
-//                "proguard-rules.pro"
-//            )
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         debug {
             applicationIdSuffix = ".debug"

@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:PiliPlus/models/model_owner.dart';
-import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/user/danmaku_rule_adapter.dart';
 import 'package:PiliPlus/models/user/info.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -11,6 +10,7 @@ import 'package:PiliPlus/utils/accounts/account_type_adapter.dart';
 import 'package:PiliPlus/utils/accounts/cookie_jar_adapter.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/set_int_adapter.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:hive_ce/hive.dart';
@@ -30,8 +30,14 @@ abstract final class GStorage {
     'whitelistMids',
     'recommendBlockedMids',
     'replyBlockedMids',
-    'danmakuFilterRules',
+    'remarkMids',
   ];
+
+  /// 不参与导出的设置项：本机临时缓存，换设备/重装后导入无意义
+  static const nonExportableSettingKeys = {
+    SettingBoxKey.aiModelListCache,
+    SettingBoxKey.aiModelListCacheTime,
+  };
   static late final Box<Uint8List>? reply;
 
   static Future<void> init() async {
@@ -97,8 +103,12 @@ abstract final class GStorage {
       }
     }
 
+    // 导出设置项时排除本机临时缓存
+    final settingData = Map<String, dynamic>.from(setting.toMap())
+      ..removeWhere((key, _) => nonExportableSettingKeys.contains(key));
+
     return Utils.jsonEncoder.convert({
-      setting.name: setting.toMap(),
+      setting.name: settingData,
       video.name: video.toMap(),
       localCache.name: localCacheData,
     });
@@ -119,6 +129,9 @@ abstract final class GStorage {
     if (map.containsKey(localCache.name)) {
       final localCacheMap = map[localCache.name] as Map<String, dynamic>;
       for (final entry in localCacheMap.entries) {
+        if (!exportableLocalCacheKeys.contains(entry.key)) {
+          continue;
+        }
         futures.add(
           localCache.put(
             entry.key,
@@ -149,16 +162,9 @@ abstract final class GStorage {
       'dynamicsBlockedMids' => value is Set ? value.toList() : value,
       'whitelistMids' ||
       'recommendBlockedMids' ||
-      'replyBlockedMids' =>
+      'replyBlockedMids' ||
+      'remarkMids' =>
         value is Map ? value.map((k, v) => MapEntry(k.toString(), v)) : value,
-      'danmakuFilterRules' =>
-        value is RuleFilter
-            ? {
-                'dmFilterString': value.dmFilterString,
-                'dmRegExp': value.dmRegExp.map((e) => e.pattern).toList(),
-                'dmUid': value.dmUid.toList(),
-              }
-            : value,
       _ => value,
     };
   }
@@ -169,26 +175,12 @@ abstract final class GStorage {
         value is List ? value.whereType<int>().toSet() : value,
       'whitelistMids' ||
       'recommendBlockedMids' ||
-      'replyBlockedMids' =>
+      'replyBlockedMids' ||
+      'remarkMids' =>
         value is Map
             ? value.map(
                 (k, v) =>
                     MapEntry(k.toString(), v is String ? v : v.toString()),
-              )
-            : value,
-      'danmakuFilterRules' =>
-        value is Map
-            ? RuleFilter(
-                (value['dmFilterString'] as List? ?? const [])
-                    .whereType<String>()
-                    .toList(),
-                (value['dmRegExp'] as List? ?? const [])
-                    .whereType<String>()
-                    .map((e) => RegExp(e, caseSensitive: false))
-                    .toList(),
-                (value['dmUid'] as List? ?? const [])
-                    .whereType<String>()
-                    .toSet(),
               )
             : value,
       _ => value,

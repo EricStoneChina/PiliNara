@@ -21,20 +21,22 @@ import 'package:PiliPlus/pages/share/view.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
+import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/feed_back.dart';
 import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:PiliPlus/utils/reply_scheme_helper.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/url_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 abstract final class PageUtils {
@@ -113,6 +115,8 @@ abstract final class PageUtils {
     Object? rid,
     bool off = false,
     Object? type,
+    int? rootRpId,
+    int? secondRpId,
   }) async {
     assert(id != null || rid != null);
     SmartDialog.showLoading();
@@ -130,6 +134,10 @@ abstract final class PageUtils {
             'id': id!,
             'type': 'opus',
           },
+          arguments: {
+            rootRpIdKey: ?rootRpId,
+            secondRpIdKey: ?secondRpId,
+          },
           off: off,
         );
       } else {
@@ -137,6 +145,8 @@ abstract final class PageUtils {
           '/dynamicDetail',
           arguments: {
             'item': response,
+            rootRpIdKey: ?rootRpId,
+            secondRpIdKey: ?secondRpId,
           },
           off: off,
         );
@@ -225,6 +235,7 @@ abstract final class PageUtils {
     DynamicItemModel item, {
     bool isPush = false,
     ValueChanged<DynamicItemModel>? onUpdate,
+    bool viewComment = false,
   }) async {
     feedBack();
 
@@ -235,6 +246,7 @@ abstract final class PageUtils {
           parameters: {
             'id': item.idStr,
             'type': 'opus',
+            if (viewComment) 'viewComment': '',
           },
         );
       } else {
@@ -243,6 +255,7 @@ abstract final class PageUtils {
           arguments: {
             'item': item,
             if (onUpdate != null) 'onUpdate': onUpdate,
+            if (viewComment) 'viewComment': true,
           },
         );
       }
@@ -294,6 +307,7 @@ abstract final class PageUtils {
               cid: cid,
               cover: cover,
               dimension: res!.dimension,
+              title: archive.title,
             );
           }
         } catch (err) {
@@ -308,6 +322,7 @@ abstract final class PageUtils {
           parameters: {
             'id': item.idStr,
             'type': 'opus',
+            if (viewComment) 'viewComment': '',
           },
         );
         break;
@@ -318,18 +333,17 @@ abstract final class PageUtils {
         break;
 
       case 'DYNAMIC_TYPE_LIVE':
-        DynamicLive2Model liveRcmd = item.modules.moduleDynamic!.major!.live!;
+        final liveRcmd = item.modules.moduleDynamic!.major!.live!;
         toLiveRoom(liveRcmd.id);
         break;
 
       case 'DYNAMIC_TYPE_LIVE_RCMD':
-        DynamicLiveModel liveRcmd =
-            item.modules.moduleDynamic!.major!.liveRcmd!;
+        final liveRcmd = item.modules.moduleDynamic!.major!.liveRcmd!;
         toLiveRoom(liveRcmd.roomId);
         break;
 
       case 'DYNAMIC_TYPE_SUBSCRIPTION_NEW':
-        LivePlayInfo live = item
+        final live = item
             .modules
             .moduleDynamic!
             .major!
@@ -342,8 +356,7 @@ abstract final class PageUtils {
 
       /// 合集查看
       case 'DYNAMIC_TYPE_UGC_SEASON':
-        DynamicArchiveModel ugcSeason =
-            item.modules.moduleDynamic!.major!.ugcSeason!;
+        final ugcSeason = item.modules.moduleDynamic!.major!.ugcSeason!;
         int aid = ugcSeason.aid!;
         String bvid = IdUtils.av2bv(aid);
         String cover = ugcSeason.cover!;
@@ -356,6 +369,7 @@ abstract final class PageUtils {
             cid: cid,
             cover: cover,
             dimension: res!.dimension,
+            title: ugcSeason.title,
           );
         }
         break;
@@ -363,7 +377,7 @@ abstract final class PageUtils {
       /// 番剧查看
       case 'DYNAMIC_TYPE_PGC_UNION':
         // if (kDebugMode) debugPrint('DYNAMIC_TYPE_PGC_UNION 番剧');
-        DynamicArchiveModel pgc = item.modules.moduleDynamic!.major!.pgc!;
+        final pgc = item.modules.moduleDynamic!.major!.pgc!;
         if (pgc.epid != null) {
           viewPgc(epId: pgc.epid);
         }
@@ -409,25 +423,6 @@ abstract final class PageUtils {
     }
   }
 
-  static void onHorizontalPreviewState(
-    ScaffoldState state,
-    List<SourceModel> imgList,
-    int index,
-  ) {
-    state.showBottomSheet(
-      constraints: const BoxConstraints(),
-      (context) => GalleryViewer(
-        sources: imgList,
-        initIndex: index,
-        quality: GlobalData().imgQuality,
-      ),
-      enableDrag: false,
-      elevation: 0.0,
-      backgroundColor: Colors.transparent,
-      sheetAnimationStyle: AnimationStyle.noAnimation,
-    );
-  }
-
   static void inAppWebview(
     String url, {
     bool off = false,
@@ -435,19 +430,12 @@ abstract final class PageUtils {
     if (Pref.openInBrowser) {
       launchURL(url);
     } else {
-      if (off) {
-        Get.offNamed(
-          '/webview',
-          parameters: {'url': url},
-          arguments: {'inApp': true},
-        );
-      } else {
-        Get.toNamed(
-          '/webview',
-          parameters: {'url': url},
-          arguments: {'inApp': true},
-        );
-      }
+      Get.offOrToNamed(
+        '/webview',
+        parameters: {'url': url},
+        arguments: const {'inApp': true},
+        off: off,
+      );
     }
   }
 
@@ -456,7 +444,7 @@ abstract final class PageUtils {
     LaunchMode mode = LaunchMode.externalApplication,
   }) async {
     try {
-      final Uri uri = Uri.parse(url);
+      final uri = Uri.parse(url);
       if (!await launchUrl(uri, mode: mode)) {
         SmartDialog.showToast('Could not launch $url');
       }
@@ -467,7 +455,6 @@ abstract final class PageUtils {
 
   static Future<void> handleWebview(
     String url, {
-    bool off = false,
     bool inApp = false,
     Map? parameters,
   }) async {
@@ -476,17 +463,7 @@ abstract final class PageUtils {
         launchURL(url);
       }
     } else {
-      if (off) {
-        Get.offNamed(
-          '/webview',
-          parameters: {
-            'url': url,
-            ...?parameters,
-          },
-        );
-      } else {
-        PiliScheme.routePushFromUrl(url, parameters: parameters);
-      }
+      PiliScheme.routePushFromUrl(url, parameters: parameters);
     }
   }
 
@@ -543,11 +520,12 @@ abstract final class PageUtils {
     if (roomId == null) {
       return;
     }
-    if (off) {
-      Get.offNamed('/liveRoom', arguments: roomId);
-    } else {
-      PageUtils.toDupNamed('/liveRoom', arguments: roomId);
-    }
+    Get.offOrToNamed(
+      '/liveRoom',
+      arguments: roomId,
+      off: off,
+      preventDuplicates: off,
+    );
   }
 
   static Future<void>? toVideoPage({
@@ -565,6 +543,8 @@ abstract final class PageUtils {
     bool off = false,
     bool isVertical = false,
     Dimension? dimension,
+    int? rootRpId,
+    int? secondRpId,
   }) {
     final arguments = {
       'aid': aid ?? IdUtils.bv2av(bvid!),
@@ -579,21 +559,11 @@ abstract final class PageUtils {
       'videoType': videoType,
       'isVertical': dimension?.isVertical ?? isVertical,
       'heroTag': Utils.makeHeroTag(cid),
+      rootRpIdKey: ?rootRpId,
+      secondRpIdKey: ?secondRpId,
       ...?extraArguments,
     };
-    if (off) {
-      return Get.offNamed(
-        '/videoV',
-        arguments: arguments,
-        preventDuplicates: false,
-      );
-    } else {
-      return Get.toNamed(
-        '/videoV',
-        arguments: arguments,
-        preventDuplicates: false,
-      );
-    }
+    return PageUtils.toDupNamed('/videoV', arguments: arguments, off: off);
   }
 
   static final _pgcRegex = RegExp(r'(ep|ss)(\d+)');
@@ -603,6 +573,7 @@ abstract final class PageUtils {
     int? progress, // milliseconds
     int? aid,
     bool off = false,
+    bool viewLater = false,
   }) {
     RegExpMatch? match = _pgcRegex.firstMatch(uri);
     if (match != null) {
@@ -611,16 +582,19 @@ abstract final class PageUtils {
       if (isPgc) {
         viewPgc(
           seasonId: isSeason ? id : null,
-          epId: isSeason ? null : id,
+          epId: isSeason ? null : .parse(id),
           progress: progress,
           off: off,
+          viewLater: viewLater,
         );
       } else {
         viewPugv(
           seasonId: isSeason ? id : null,
-          epId: isSeason ? null : id,
+          epId: isSeason ? null : .parse(id),
           aid: aid,
+          progress: progress,
           off: off,
+          viewLater: viewLater,
         );
       }
       return true;
@@ -645,95 +619,41 @@ abstract final class PageUtils {
   }
 
   static Future<void> viewPgc({
-    dynamic seasonId,
-    dynamic epId,
+    Object? seasonId,
+    int? epId,
     int? progress, // milliseconds
     bool off = false,
+    bool viewLater = false,
   }) async {
     try {
       SmartDialog.showLoading(msg: '资源获取中');
       final res = await SearchHttp.pgcInfo(seasonId: seasonId, epId: epId);
       SmartDialog.dismiss();
       if (res case Success(:final response)) {
-        final episodes = response.episodes;
-        final hasEpisode = episodes != null && episodes.isNotEmpty;
+        final (EpisodeItem? episode, int? sectionIndex) = response.findEpisode(
+          epId,
+        );
 
-        EpisodeItem? episode;
-
-        void viewSection(EpisodeItem episode) {
+        if (episode != null) {
           toVideoPage(
-            videoType: VideoType.ugc,
+            videoType: .pgc,
             bvid: episode.bvid!,
             cid: episode.cid!,
-            seasonId: response.seasonId,
-            epId: episode.epId,
+            seasonId: response.seasonId!,
+            epId: episode.epId!,
             cover: episode.cover,
-            progress: progress,
-            extraArguments: {
-              'pgcApi': true,
-              'pgcItem': response,
-            },
-            off: off,
-          );
-        }
-
-        if (epId != null) {
-          epId = epId.toString();
-          if (hasEpisode) {
-            episode = episodes.firstWhereOrNull(
-              (item) => item.epId.toString() == epId,
-            );
-          }
-
-          // find section
-          if (episode == null) {
-            final sections = response.section;
-            if (sections != null && sections.isNotEmpty) {
-              for (final section in sections) {
-                final episodes = section.episodes;
-                if (episodes != null && episodes.isNotEmpty) {
-                  for (final episode in episodes) {
-                    if (episode.epId.toString() == epId) {
-                      // view as ugc
-                      viewSection(episode);
-                      return;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (hasEpisode) {
-          episode ??= findEpisode(
-            episodes,
-            epId: response.userStatus?.progress?.lastEpId,
-          );
-          toVideoPage(
-            videoType: VideoType.pgc,
-            bvid: episode.bvid!,
-            cid: episode.cid!,
-            seasonId: response.seasonId,
-            epId: episode.epId,
-            pgcType: response.type,
-            cover: episode.cover,
+            title: episode.title,
             progress: progress,
             extraArguments: {
               'pgcItem': response,
+              if (viewLater) 'viewLater': true,
+              'sectionIndex': ?sectionIndex,
             },
             off: off,
           );
-          return;
         } else {
-          episode ??= response.section?.firstOrNull?.episodes?.firstOrNull;
-          if (episode != null) {
-            viewSection(episode);
-            return;
-          }
+          SmartDialog.showToast('剧集为空');
         }
-
-        SmartDialog.showToast('资源加载失败');
       } else {
         res.toast();
       }
@@ -745,10 +665,12 @@ abstract final class PageUtils {
   }
 
   static Future<void> viewPugv({
-    dynamic seasonId,
-    dynamic epId,
+    Object? seasonId,
+    int? epId,
     int? aid,
+    int? progress, // milliseconds
     bool off = false,
+    bool viewLater = false,
   }) async {
     try {
       SmartDialog.showLoading(msg: '资源获取中');
@@ -760,21 +682,25 @@ abstract final class PageUtils {
           EpisodeItem? episode;
           if (aid != null) {
             episode = episodes.firstWhereOrNull((e) => e.aid == aid);
+          } else {
+            epId ??= response.userStatus?.progress?.lastEpId;
+            if (epId != null) {
+              episode = episodes.firstWhereOrNull((e) => e.id == epId);
+            }
           }
-          episode ??= findEpisode(
-            episodes,
-            epId: epId ?? response.userStatus?.progress?.lastEpId,
-            isPgc: false,
-          );
+          episode ??= episodes.first;
+
           toVideoPage(
-            videoType: VideoType.pugv,
+            videoType: .pugv,
             aid: episode.aid!,
             cid: episode.cid!,
-            seasonId: response.seasonId,
-            epId: episode.id,
+            seasonId: response.seasonId!,
+            epId: episode.id!,
             cover: episode.cover,
+            progress: progress,
             extraArguments: {
               'pgcItem': response,
+              if (viewLater) 'viewLater': true,
             },
             off: off,
           );
@@ -790,26 +716,17 @@ abstract final class PageUtils {
     }
   }
 
-  static void toDupNamed(
+  @pragma('vm:prefer-inline')
+  static Future<T?>? toDupNamed<T>(
     String page, {
     dynamic arguments,
     Map<String, String>? parameters,
     bool off = false,
-  }) {
-    if (off) {
-      Get.offNamed(
-        page,
-        arguments: arguments,
-        parameters: parameters,
-        preventDuplicates: false,
-      );
-    } else {
-      Get.toNamed(
-        page,
-        arguments: arguments,
-        parameters: parameters,
-        preventDuplicates: false,
-      );
-    }
-  }
+  }) => Get.offOrToNamed(
+    page,
+    arguments: arguments,
+    parameters: parameters,
+    preventDuplicates: false,
+    off: off,
+  );
 }

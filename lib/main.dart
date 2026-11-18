@@ -12,16 +12,20 @@ import 'package:PiliPlus/models/common/theme/theme_color_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/router/app_pages.dart';
 import 'package:PiliPlus/services/account_service.dart';
-import 'package:PiliPlus/services/download/download_collection_service.dart';
+import 'package:PiliPlus/services/download/download_folder_service.dart';
+import 'package:PiliPlus/services/download/download_library_service.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/services/logger.dart';
+import 'package:PiliPlus/services/route_stack_observer.dart';
 import 'package:PiliPlus/services/service_locator.dart';
-import 'package:PiliPlus/utils/app_font.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
-import 'package:PiliPlus/utils/calc_window_position.dart';
-import 'package:PiliPlus/utils/danmaku_font.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
+import 'package:PiliPlus/utils/desktop/calc_window_position.dart';
+import 'package:PiliPlus/utils/device_utils.dart';
+import 'package:PiliPlus/utils/extension/core_palettes_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
+import 'package:PiliPlus/utils/font_utils.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/json_file_handler.dart';
 import 'package:PiliPlus/utils/max_screen_size.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
@@ -34,20 +38,20 @@ import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:catcher_2/catcher_2.dart';
 import 'package:collection/collection.dart';
-import 'package:dynamic_color/dynamic_color.dart';
+import 'package:dynamic_color/dynamic_color.dart' show DynamicColorPlugin;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi show Size, Rectangle;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
-import 'package:window_manager/window_manager.dart' hide calcWindowPosition;
+import 'package:window_manager/window_manager.dart';
 
 WebViewEnvironment? webViewEnvironment;
 
@@ -98,31 +102,30 @@ void main() async {
   try {
     await GStorage.init();
   } catch (e) {
-    await Utils.copyText(e.toString());
+    await Utils.copyText(e.toString(), needToast: false);
     if (kDebugMode) debugPrint('GStorage init error: $e');
-    exit(0);
+    DeviceUtils.exitApp();
   }
-  await AppFont.init();
-  await DanmakuFont.init();
   ScaledWidgetsFlutterBinding.instance.scaleFactor = Pref.uiScale;
   await Future.wait([
     _initDownPath(),
     _initTmpPath(),
     CacheManager.ensureInitialized(),
+    FontUtils.init(),
   ]);
   Get
     ..lazyPut(AccountService.new)
-    ..lazyPut(DownloadCollectionService.new)
-    ..lazyPut(DownloadService.new);
+    ..lazyPut(DownloadService.new)
+    ..put(DownloadFolderService())
+    ..put(DownloadLibraryService());
   HttpOverrides.global = _CustomHttpOverrides();
-
-  CacheManager.autoClearCache();
 
   if (PlatformUtils.isMobile) {
     if (Platform.isAndroid) MaxScreenSize.init();
     await Future.wait([
       if (Pref.horizontalScreen) ?fullMode() else ?portraitUpMode(),
       setupServiceLocator(),
+      if (Platform.isIOS) IOSPipHelper.init(),
     ]);
   } else if (Platform.isWindows) {
     if (await WebViewEnvironment.getAvailableVersion() != null) {
@@ -132,7 +135,8 @@ void main() async {
         ),
       );
     }
-  } else if (Platform.isMacOS) {
+    await setupServiceLocator();
+  } else if (Platform.isMacOS || Platform.isLinux) {
     await setupServiceLocator();
   }
 
@@ -141,6 +145,9 @@ void main() async {
   RequestUtils.syncHistoryStatus();
 
   SmartDialog.config.toast = SmartConfigToast(displayType: .onlyRefresh);
+
+  // ESC 全平台注册：平板/手机外接键盘也可用（PageRoute 默认不消费 escape）
+  FocusManager.instance.addEarlyKeyEventHandler(_onKeyEvent);
 
   if (PlatformUtils.isMobile) {
     SystemChrome.setEnabledSystemUIMode(.edgeToEdge);
@@ -168,26 +175,6 @@ void main() async {
     } else {
       ScreenBrightnessPlatform.instance.setAutoReset(false);
     }
-  } else if (PlatformUtils.isDesktop) {
-    await windowManager.ensureInitialized();
-
-    final windowOptions = WindowOptions(
-      minimumSize: const Size(400, 720),
-      skipTaskbar: false,
-      titleBarStyle: Pref.showWindowTitleBar
-          ? TitleBarStyle.normal
-          : TitleBarStyle.hidden,
-      title: Constants.appName,
-    );
-    windowManager.waitUntilReadyToShow(windowOptions, () async {
-      final windowSize = Pref.windowSize;
-      await windowManager.setBounds(
-        await calcWindowPosition(windowSize) & windowSize,
-      );
-      if (Pref.isWindowMaximized) await windowManager.maximize();
-      await windowManager.show();
-      await windowManager.focus();
-    });
   }
 
   if (Pref.dynamicColor) {
@@ -216,6 +203,65 @@ void main() async {
   } else {
     runApp(const MyApp());
   }
+
+  if (PlatformUtils.isDesktop) {
+    final window = WindowManager.instance.getCurrent();
+    if (window != null) {
+      final showTitleBar = Pref.showWindowTitleBar;
+      // macOS 隐藏标题栏时改用 contentUnderTitleBar，保持窗口可拖动
+      final useContentUnderTitleBar = Platform.isMacOS && !showTitleBar;
+      final (nativeapi.Size minSize, nativeapi.Rectangle bounds) =
+          calcWindowBounds();
+      window
+        ..titleBarStyle = useContentUnderTitleBar || showTitleBar
+            ? .normal
+            : .hidden
+        ..isWindowControlButtonsVisible = true
+        ..bounds = bounds
+        ..minimumSize = minSize
+        ..isVisibleInTaskbar = true
+        ..title = Constants.appName;
+      if (useContentUnderTitleBar) window.setContentUnderTitleBar(true);
+      if (Pref.isWindowMaximized) window.maximize();
+      void show([_]) => window
+        ..focus()
+        ..show();
+      switch (WidgetsBinding.instance.schedulerPhase) {
+        case .idle || .postFrameCallbacks:
+          WidgetsBinding.instance.scheduleFrameCallback(show);
+        case .transientCallbacks || .midFrameMicrotasks || .persistentCallbacks:
+          WidgetsBinding.instance.addPostFrameCallback(show);
+      }
+    }
+  }
+}
+
+KeyEventResult _onKeyEvent(KeyEvent event) {
+  if (event is KeyDownEvent && event.logicalKey == .escape) {
+    _onBack();
+    return .handled;
+  }
+  return .ignored;
+}
+
+void _onBack() {
+  if (SmartDialog.checkExist()) {
+    SmartDialog.dismiss();
+    return;
+  }
+
+  final route = Get.routing.route;
+  if (route is GetPageRoute) {
+    if (route.popDisposition == .doNotPop) {
+      route.onPopInvokedWithResult(false, null);
+      return;
+    }
+  }
+
+  final navigator = Get.key.currentState!;
+  if (navigator.canPop()) {
+    navigator.pop();
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -223,42 +269,32 @@ class MyApp extends StatelessWidget {
 
   static ColorScheme? _light, _dark;
 
-  static void _onBack() {
-    if (SmartDialog.checkExist()) {
-      SmartDialog.dismiss();
-      return;
-    }
-
-    final route = Get.routing.route;
-    if (route is GetPageRoute) {
-      if (route.popDisposition == .doNotPop) {
-        route.onPopInvokedWithResult(false, null);
-        return;
-      }
-    }
-
-    final navigator = Get.key.currentState;
-    if (navigator?.canPop() ?? false) {
-      navigator!.pop();
-    }
-  }
-
   static (ThemeData, ThemeData) getAllTheme() {
     final dynamicColor = _light != null && _dark != null && Pref.dynamicColor;
-    late final brandColor = colorThemeTypes[Pref.customColor].color;
-    late final variant = Pref.schemeVariant;
+
+    final ColorScheme lightScheme, darkScheme;
+    if (dynamicColor) {
+      lightScheme = _light!;
+      darkScheme = _dark!;
+    } else {
+      final customColor = Pref.customColor;
+      final brandColor =
+          colorThemeTypes.elementAtOrNull(customColor)?.color ??
+          Color(customColor);
+      final variant = Pref.schemeVariant;
+
+      lightScheme = brandColor.asColorSchemeSeed(variant, .light);
+      darkScheme = brandColor.asColorSchemeSeed(variant, .dark);
+    }
+
     return (
       ThemeUtils.lightTheme = ThemeUtils.getThemeData(
-        colorScheme: dynamicColor
-            ? _light!
-            : brandColor.asColorSchemeSeed(variant, .light),
+        colorScheme: lightScheme,
         isDynamic: dynamicColor,
       ),
       ThemeUtils.darkTheme = ThemeUtils.getThemeData(
         isDark: true,
-        colorScheme: dynamicColor
-            ? _dark!
-            : brandColor.asColorSchemeSeed(variant, .dark),
+        colorScheme: darkScheme,
         isDynamic: dynamicColor,
       ),
     );
@@ -272,11 +308,7 @@ class MyApp extends StatelessWidget {
       theme: light,
       darkTheme: dark,
       themeMode: ThemeUtils.themeMode = Pref.themeMode,
-      localizationsDelegates: const [
-        GlobalCupertinoLocalizations.delegate,
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-      ],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       locale: const Locale("zh", "CN"),
       fallbackLocale: const Locale("zh", "CN"),
       supportedLocales: const [Locale("zh", "CN"), Locale("en", "US")],
@@ -284,51 +316,49 @@ class MyApp extends StatelessWidget {
       getPages: Routes.getPages,
       defaultTransition: Pref.pageTransition,
       builder: FlutterSmartDialog.init(
-        toastBuilder: (msg) => CustomToast(msg: msg),
-        loadingBuilder: (msg) => LoadingWidget(msg: msg),
-        // 使用自定义的静态构建方法
+        toastBuilder: CustomToast.new,
+        loadingBuilder: LoadingWidget.new,
+        notifyStyle: const FlutterSmartNotifyStyle(
+          warningBuilder: NotifyWarning.new,
+        ),
         builder: _builder,
       ),
       navigatorObservers: [
         routeObserver,
+        routeStackObserver,
         FlutterSmartDialog.observer,
       ],
       scrollBehavior: PlatformUtils.isDesktop
-          ? const CustomScrollBehavior(desktopDragDevices)
+          ? const CustomScrollBehavior()
           : null,
     );
   }
 
   // 修复后的 Builder 方法
   static Widget _builder(BuildContext context, Widget? child) {
-    final mediaQuery = MediaQuery.of(context);
     final uiScale = Pref.uiScale;
+    var mediaQuery = MediaQuery.of(context);
     final textScaler = TextScaler.linear(Pref.defaultTextScale);
 
-    // --- Fix for Flutter SDK bug on HyperOS windowed mode (Android only) ---
-    // https://github.com/flutter/flutter/issues/164092
-    // https://github.com/flutter/flutter/issues/161086
-    EdgeInsets effectiveViewPadding = mediaQuery.viewPadding;
-    EdgeInsets effectivePadding = mediaQuery.padding;
-
+    // 修复 HyperOS 小窗/自由窗口模式下 MediaQuery 异常上报接近整个窗口
+    // 高度的安全区 padding，导致内容被顶出屏幕只剩底栏的问题。
+    // 参考: https://github.com/flutter/flutter/issues/161086
     if (Platform.isAndroid) {
-      // Fallback padding values based on typical Android status/navigation bar heights
-      const fallbackPadding = EdgeInsets.only(top: 25, bottom: 35);
-
-      // Threshold for detecting abnormal padding:
-      // - Normal status bars are typically 20-48 dp
-      // - Values > 50 indicate the Flutter SDK bug on HyperOS windowed mode
-      // - Values == 0 are valid in fullscreen/immersive mode
-      // - Check both top AND bottom to avoid misdetecting during orientation changes
-      const maxNormalPadding = 50.0;
-
-      final hasAbnormalPadding =
-          mediaQuery.viewPadding.top > maxNormalPadding &&
-          mediaQuery.viewPadding.bottom > maxNormalPadding;
-
-      if (hasAbnormalPadding) {
-        effectiveViewPadding = fallbackPadding;
-        effectivePadding = fallbackPadding;
+      final sizeHeight = mediaQuery.size.height;
+      final viewPadding = mediaQuery.viewPadding;
+      final topAbnormal = viewPadding.top > sizeHeight * 0.4;
+      final bottomAbnormal = viewPadding.bottom > sizeHeight * 0.4;
+      if (topAbnormal || bottomAbnormal) {
+        mediaQuery = mediaQuery.copyWith(
+          padding: mediaQuery.padding.copyWith(
+            top: topAbnormal ? 0 : mediaQuery.padding.top,
+            bottom: bottomAbnormal ? 0 : mediaQuery.padding.bottom,
+          ),
+          viewPadding: viewPadding.copyWith(
+            top: topAbnormal ? 0 : viewPadding.top,
+            bottom: bottomAbnormal ? 0 : viewPadding.bottom,
+          ),
+        );
       }
     }
     // -----------------------------------------------------------------------
@@ -349,19 +379,16 @@ class MyApp extends StatelessWidget {
       child = MediaQuery(
         data: mediaQuery.copyWith(
           textScaler: textScaler,
-          padding: tmpPadding ?? effectivePadding,
-          viewPadding: tmpPadding ?? effectiveViewPadding,
+          padding: tmpPadding ?? mediaQuery.padding,
+          viewPadding: tmpPadding ?? mediaQuery.viewPadding,
         ),
         child: child!,
       );
     }
-    if (PlatformUtils.isDesktop) {
-      return BackDetector(
-        onBack: _onBack,
-        child: child,
-      );
-    }
-    return child;
+    return BackDetector(
+      onBack: _onBack,
+      child: child,
+    );
   }
 
   /// from [DynamicColorBuilderState.initPlatformState]
@@ -369,14 +396,17 @@ class MyApp extends StatelessWidget {
     if (_light != null || _dark != null) return true;
     // Platform messages may fail, so we use a try/catch PlatformException.
     try {
-      final corePalette = await DynamicColorPlugin.getCorePalette();
+      final colors = await DynamicColorPlugin.channel.invokeMethod(
+        DynamicColorPlugin.methodName,
+      );
 
-      if (corePalette != null) {
+      if (colors != null) {
+        final corePalettes = CorePalettesExt.fromList(colors.toList());
         if (kDebugMode) {
           debugPrint('dynamic_color: Core palette detected.');
         }
-        _light = corePalette.toColorScheme();
-        _dark = corePalette.toColorScheme(brightness: Brightness.dark);
+        _light = corePalettes.toColorScheme();
+        _dark = corePalettes.toColorScheme(brightness: Brightness.dark);
         return true;
       }
     } on PlatformException {

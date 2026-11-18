@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' show pow, sqrt;
 
 import 'package:PiliPlus/common/widgets/gesture/horizontal_drag_gesture_recognizer.dart'
     show deviceTouchSlop;
@@ -8,13 +7,16 @@ import 'package:PiliPlus/common/widgets/pair.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/bar_hide_type.dart';
 import 'package:PiliPlus/models/common/danmaku/danmaku_font_sync_mode.dart';
+import 'package:PiliPlus/models/common/dm_chart_source.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamic_badge_mode.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/dynamic/up_panel_position.dart';
 import 'package:PiliPlus/models/common/follow_order_type.dart';
 import 'package:PiliPlus/models/common/member/tab_type.dart';
+import 'package:PiliPlus/models/common/mine_tab_type.dart';
 import 'package:PiliPlus/models/common/msg/msg_unread_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
+import 'package:PiliPlus/models/common/rcmd_source.dart';
 import 'package:PiliPlus/models/common/reply/reply_sort_type.dart';
 import 'package:PiliPlus/models/common/sponsor_block/segment_type.dart';
 import 'package:PiliPlus/models/common/sponsor_block/skip_type.dart';
@@ -22,15 +24,13 @@ import 'package:PiliPlus/models/common/super_chat_time_type.dart';
 import 'package:PiliPlus/models/common/super_chat_type.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
 import 'package:PiliPlus/models/common/theme/theme_type.dart';
-import 'package:PiliPlus/models/common/video/audio_quality.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
-import 'package:PiliPlus/models/common/video/live_quality.dart';
 import 'package:PiliPlus/models/common/video/subtitle_pref_type.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/user/info.dart';
-import 'package:PiliPlus/pages/setting/pages/fullscreen_sc_size.dart'
+import 'package:PiliPlus/pages/setting/pages/fullscreen_sc.dart'
     show kFullScreenSCWidth;
 import 'package:PiliPlus/plugin/pl_player/models/audio_output_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/bottom_progress_behavior.dart';
@@ -49,9 +49,19 @@ import 'package:PiliPlus/utils/utils.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flex_seed_scheme/flex_seed_scheme.dart' show FlexSchemeVariant;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
+import 'package:material_ui/material_ui.dart';
+
+/// 关键词过滤规则列表的匹配入口，语义等价于逐项独立匹配、命中任一。
+extension RegExpListMatch on List<RegExp> {
+  bool hasMatch(String input) {
+    for (final rule in this) {
+      if (rule.hasMatch(input)) return true;
+    }
+    return false;
+  }
+}
 
 abstract final class Pref {
   static final Box _setting = GStorage.setting;
@@ -312,8 +322,10 @@ abstract final class Pref {
 
   static List<double> get springDescription => List<double>.from(
     _setting.get(SettingBoxKey.springDescription) ??
-        [0.5, 100.0, 2.2 * sqrt(50)], // [mass, stiffness, damping]
+        // duration: 0.3, bounce: 0.0
+        const [1.0, 438.64908449286037, 41.88790204786391],
   );
+  //   [0.5, 100.0, 2.2 * math.sqrt(50)], // [mass, stiffness, damping]
 
   static List<double> get speedList => List<double>.from(
     _video.get(
@@ -324,16 +336,18 @@ abstract final class Pref {
 
   static List<Pair<SegmentType, SkipType>> get blockSettings {
     final list = _setting.get(SettingBoxKey.blockSettings) as List?;
-    if (list == null || list.length != SegmentType.values.length) {
+    if (list == null || list.length > SegmentType.values.length) {
       return SegmentType.values
           .map((i) => Pair(first: i, second: SkipType.skipOnce))
           .toList();
     }
     return SegmentType.values
         .map(
-          (item) => Pair(
+          (item) => Pair<SegmentType, SkipType>(
             first: item,
-            second: SkipType.values[list[item.index]],
+            second: item.index < list.length
+                ? .values[list[item.index]]
+                : .skipOnce,
           ),
         )
         .toList();
@@ -457,21 +471,25 @@ abstract final class Pref {
     defaultValue: AudioQuality.k192.code,
   );
 
-  static String get defaultDecode => _setting.get(
-    SettingBoxKey.defaultDecode,
-    defaultValue: VideoDecodeFormatType.AVC.codes.first,
-  );
+  static List<VideoDecodeFormatType> get preferCodecs {
+    final codecs = _setting.get(SettingBoxKey.preferCodecs);
+    if (codecs is List) {
+      return codecs.map((i) => VideoDecodeFormatType.values.byName(i)).toList();
+    }
+    return const <VideoDecodeFormatType>[.AVC, .AV1];
+  }
 
-  static String get secondDecode => _setting.get(
-    SettingBoxKey.secondDecode,
-    defaultValue: VideoDecodeFormatType.AV1.codes.first,
-  );
+  static List<VideoDecodeFormatType> get preferCodecsCellular {
+    final codecs = _setting.get(SettingBoxKey.preferCodecsCellular);
+    if (codecs is List) {
+      return codecs.map((i) => VideoDecodeFormatType.values.byName(i)).toList();
+    }
+    return preferCodecs;
+  }
 
   static String get hardwareDecoding => _setting.get(
     SettingBoxKey.hardwareDecoding,
-    defaultValue: Platform.isAndroid
-        ? HwDecType.autoSafe.hwdec
-        : HwDecType.auto.hwdec,
+    defaultValue: HwDecType.kHwdec,
   );
 
   static String get videoSync =>
@@ -489,8 +507,16 @@ abstract final class Pref {
     return CDNService.backupUrl;
   }
 
+  static String? get customCDNUrl {
+    final value = _setting.get(SettingBoxKey.customCDNUrl);
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
   static String get banWordForRecommend =>
       _setting.get(SettingBoxKey.banWordForRecommend, defaultValue: '');
+
+  static String get banWordForRecommendUpName =>
+      _setting.get(SettingBoxKey.banWordForRecommendUpName, defaultValue: '');
 
   static String get banWordForReply =>
       _setting.get(SettingBoxKey.banWordForReply, defaultValue: '');
@@ -500,6 +526,35 @@ abstract final class Pref {
 
   static bool get appRcmd =>
       _setting.get(SettingBoxKey.appRcmd, defaultValue: true);
+
+  static List<RcmdSource> get rcmdSources {
+    final stored = _setting.get(SettingBoxKey.rcmdSources);
+    if (stored is List) {
+      final sources = <RcmdSource>[];
+      for (final name in stored) {
+        final source = RcmdSource.values.where((e) => e.name == name).firstOrNull;
+        if (source != null && !sources.contains(source)) sources.add(source);
+      }
+      if (sources.isNotEmpty) return sources;
+    }
+    // 本地旧模式的 2 是 App+Web，上游旧来源的 2 是 PC。
+    switch (_setting.get(SettingBoxKey.rcmdMode)) {
+      case 0: return [RcmdSource.app];
+      case 1: return [RcmdSource.web];
+      case 2: return [RcmdSource.app, RcmdSource.web];
+    }
+    final legacy = _setting.get(SettingBoxKey.rcmdSource);
+    if (legacy is int && legacy >= 0 && legacy < RcmdSource.values.length) {
+      return [RcmdSource.values[legacy]];
+    }
+    return [appRcmd ? RcmdSource.app : RcmdSource.web];
+  }
+
+  static Future<void> setRcmdSources(List<RcmdSource> sources) async {
+    if (sources.isEmpty) return;
+    await _setting.put(SettingBoxKey.rcmdSources,
+        sources.map((e) => e.name).toSet().toList());
+  }
 
   static bool get removeBlockedRcmd =>
       _setting.get(SettingBoxKey.removeBlockedRcmd, defaultValue: false);
@@ -524,9 +579,6 @@ abstract final class Pref {
   static double get blockLimit =>
       _setting.get(SettingBoxKey.blockLimit, defaultValue: 0.0);
 
-  static double get refreshDragPercentage =>
-      _setting.get(SettingBoxKey.refreshDragPercentage, defaultValue: 0.25);
-
   static double get refreshDisplacement => _setting.get(
     SettingBoxKey.refreshDisplacement,
     defaultValue: PlatformUtils.isMobile ? 20.0 : 40.0,
@@ -545,6 +597,11 @@ abstract final class Pref {
 
   static bool get blockToast =>
       _setting.get(SettingBoxKey.blockToast, defaultValue: true);
+
+  static bool get blockSkipWhenSeekIntoSegment => _setting.get(
+    SettingBoxKey.blockSkipWhenSeekIntoSegment,
+    defaultValue: false,
+  );
 
   static String get blockServer => _setting.get(
     SettingBoxKey.blockServer,
@@ -652,6 +709,33 @@ abstract final class Pref {
   static int get subtitleFontWeight =>
       _setting.get(SettingBoxKey.subtitleFontWeight, defaultValue: 5);
 
+  // 副字幕默认小一号(80%/全屏120%),其余默认同主字幕
+  static double get subtitleSecondaryFontScale =>
+      _setting.get(SettingBoxKey.subtitleSecondaryFontScale, defaultValue: 0.8);
+
+  static double get subtitleSecondaryFontScaleFS => _setting.get(
+    SettingBoxKey.subtitleSecondaryFontScaleFS,
+    defaultValue: 1.1,
+  );
+
+  static double get subtitleSecondaryBgOpacity => _setting.get(
+    SettingBoxKey.subtitleSecondaryBgOpacity,
+    defaultValue: 0.67,
+  );
+
+  static double get subtitleSecondaryStrokeWidth => _setting.get(
+    SettingBoxKey.subtitleSecondaryStrokeWidth,
+    defaultValue: 2.0,
+  );
+
+  static int get subtitleSecondaryFontWeight =>
+      _setting.get(SettingBoxKey.subtitleSecondaryFontWeight, defaultValue: 5);
+
+  static double get subtitleSecondarySpacing => _setting.get(
+    SettingBoxKey.subtitleSecondarySpacing,
+    defaultValue: 4.0,
+  );
+
   static bool get badCertificateCallback =>
       _setting.get(SettingBoxKey.badCertificateCallback, defaultValue: false);
 
@@ -720,6 +804,9 @@ abstract final class Pref {
   static int get mergeDanmakuMarkThreshold =>
       _setting.get(SettingBoxKey.mergeDanmakuMarkThreshold, defaultValue: 1);
 
+  static bool get danmakuEnlarge =>
+      _setting.get(SettingBoxKey.danmakuEnlarge, defaultValue: true);
+
   static int get danmakuEnlargeThreshold =>
       _setting.get(SettingBoxKey.danmakuEnlargeThreshold, defaultValue: 7);
 
@@ -771,6 +858,16 @@ abstract final class Pref {
   static bool get showSeekPreview =>
       _setting.get(SettingBoxKey.showSeekPreview, defaultValue: true);
 
+  static DmChartSource get dmChartSource {
+    final index = _setting.get(SettingBoxKey.dmChartSource);
+    if (index is int) {
+      return DmChartSource.values.elementAtOrNull(index) ??
+          DmChartSource.disabled;
+    }
+    // Backward compatibility with the old boolean switch.
+    return showDmChart ? DmChartSource.officialFirst : DmChartSource.disabled;
+  }
+
   static bool get showDmChart =>
       _setting.get(SettingBoxKey.showDmChart, defaultValue: false);
 
@@ -799,6 +896,9 @@ abstract final class Pref {
   static bool get removeOnlyFansVideoDyn =>
       _setting.get(SettingBoxKey.removeOnlyFansVideoDyn, defaultValue: false);
 
+  static bool get removeDynVideoDyn =>
+      _setting.get(SettingBoxKey.removeDynVideoDyn, defaultValue: false);
+
   static bool get antiGoodsReply =>
       _setting.get(SettingBoxKey.antiGoodsReply, defaultValue: false);
 
@@ -807,6 +907,12 @@ abstract final class Pref {
 
   static set replyMinLevel(int v) =>
       _setting.put(SettingBoxKey.replyMinLevel, v);
+
+  static bool get keepUpOwnerReply =>
+      _setting.get(SettingBoxKey.keepUpOwnerReply, defaultValue: true);
+
+  static bool get keepUpTopReply =>
+      _setting.get(SettingBoxKey.keepUpTopReply, defaultValue: true);
 
   static bool get keepUpLikeReply =>
       _setting.get(SettingBoxKey.keepUpLikeReply, defaultValue: false);
@@ -828,6 +934,9 @@ abstract final class Pref {
   static bool get enableShrinkVideoSize =>
       _setting.get(SettingBoxKey.enableShrinkVideoSize, defaultValue: true);
 
+  static bool get enablePinchRotate =>
+      _setting.get(SettingBoxKey.enablePinchRotate, defaultValue: true);
+
   static bool get showDynActionBar =>
       _setting.get(SettingBoxKey.showDynActionBar, defaultValue: true);
 
@@ -838,6 +947,9 @@ abstract final class Pref {
     SettingBoxKey.enableSlideVolumeBrightness,
     defaultValue: true,
   );
+
+  static bool get enableScrollVolume =>
+      _setting.get(SettingBoxKey.enableScrollVolume, defaultValue: true);
 
   static bool get enableSlideFS =>
       _setting.get(SettingBoxKey.enableSlideFS, defaultValue: true);
@@ -858,8 +970,26 @@ abstract final class Pref {
     defaultValue: LiveQuality.superHD.code,
   );
 
-  static int get appFontWeight =>
-      _setting.get(SettingBoxKey.appFontWeight, defaultValue: -1);
+  static FontWeight get appFontWeight {
+    // TODO: remove next 2 version
+    const appFontWeightV1 = 'appFontWeight';
+    final int? valV1 = _setting.get(appFontWeightV1);
+    if (valV1 != null) {
+      _setting.delete(appFontWeightV1);
+      if (valV1 == -1) {
+        return .normal;
+      } else {
+        _setting.put(SettingBoxKey.appFontWeightV2, valV1);
+        return .values[valV1];
+      }
+    }
+
+    final int? val = _setting.get(SettingBoxKey.appFontWeightV2);
+    if (val == null) {
+      return .normal;
+    }
+    return .values[val];
+  }
 
   static String? get customFontPath =>
       _setting.get(SettingBoxKey.customFontPath);
@@ -930,7 +1060,7 @@ abstract final class Pref {
       _setting.get(SettingBoxKey.showPgcTimeline, defaultValue: true);
 
   static num get maxCacheSize =>
-      _setting.get(SettingBoxKey.maxCacheSize) ?? pow(1024, 3);
+      _setting.get(SettingBoxKey.maxCacheSize) ?? 1 << 30;
 
   static bool get optTabletNav =>
       _setting.get(SettingBoxKey.optTabletNav, defaultValue: true);
@@ -948,24 +1078,17 @@ abstract final class Pref {
   static String get banWordForDyn =>
       _setting.get(SettingBoxKey.banWordForDyn, defaultValue: '');
 
-  /// Helper method to parse ban word storage format into regex pattern
-  /// Supports both old (pipe-separated) and new (newline-separated) formats
-  /// Returns a regex pattern string with proper alternation
-  static String parseBanWordToRegex(String stored) {
-    if (stored.isEmpty) return '';
-
-    List<String> items;
-
-    // Check if it's the old pipe-separated format (no newlines)
+  /// 解析关键词存储串，返回列表项。
+  /// 支持旧格式（`|` 分隔）与新格式（`\n` 分隔）。
+  static List<String> parseBanWordItems(String stored) {
+    if (stored.isEmpty) return const [];
+    // 不含换行但含 `|`：可能是旧格式的多关键词，也可能是用户手写的一条正则
     if (!stored.contains('\n') && stored.contains('|')) {
-      // Old format: pipe-separated
-      // Heuristic: if it looks like multiple short items, it's old format
       final parts = stored
           .split('|')
           .map((e) => e.trim())
           .where((e) => e.isNotEmpty)
           .toList();
-
       if (parts.length > 1) {
         final hasComplexRegex = parts.any(
           (p) =>
@@ -976,39 +1099,42 @@ abstract final class Pref {
               p.contains('^') ||
               p.contains('\$'),
         );
-
-        if (!hasComplexRegex) {
-          // Old format with simple keywords
-          items = parts;
-        } else {
-          // Single complex regex - use as-is
-          return stored;
-        }
+        // 含正则语法时整串视作一条正则，不拆
+        if (hasComplexRegex) return [stored];
       } else {
-        // Single item, keep as-is
-        return stored;
+        return [stored];
       }
-    } else {
-      // New format: newline-separated
-      items = stored
-          .split('\n')
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
+      return parts;
     }
+    return stored
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
 
-    if (items.isEmpty) return '';
+  /// 逐项编译关键词为独立正则，命中任一即过滤。
+  /// 单项非法时只跳过该项，不影响同列表其他项。
+  static List<RegExp> compileBanWord(String stored) {
+    final rules = <RegExp>[];
+    for (final item in parseBanWordItems(stored)) {
+      try {
+        rules.add(RegExp(item, caseSensitive: false));
+      } on FormatException catch (e) {
+        debugPrint('Invalid ban word pattern ignored: $item ($e)');
+      }
+    }
+    return rules;
+  }
 
-    // Build regex by joining all patterns with alternation
-    return items
-        .map((item) {
-          // If the item contains '|' and isn't already grouped, wrap it
-          if (item.contains('|') && !item.startsWith('(')) {
-            return '($item)';
-          }
-          return item;
-        })
-        .join('|');
+  /// 单项是否可以编译为正则，与 [compileBanWord] 使用同一套选项。
+  static bool isBanWordPatternValid(String pattern) {
+    try {
+      RegExp(pattern, caseSensitive: false);
+      return true;
+    } on FormatException {
+      return false;
+    }
   }
 
   static bool get enableLog =>
@@ -1064,6 +1190,9 @@ abstract final class Pref {
   static bool get autoPlayEnable =>
       _setting.get(SettingBoxKey.autoPlayEnable, defaultValue: false);
 
+  static bool get autoPlayWifiOnly =>
+      _setting.get(SettingBoxKey.autoPlayWifiOnly, defaultValue: false);
+
   static bool get pipNoDanmaku =>
       _setting.get(SettingBoxKey.pipNoDanmaku, defaultValue: false);
 
@@ -1109,6 +1238,8 @@ abstract final class Pref {
   static double get sideBarThreshold =>
       (_setting.get(SettingBoxKey.sideBarThreshold, defaultValue: 600.0) as num)
           .toDouble();
+  static bool get hideSideBarLabel =>
+      _setting.get(SettingBoxKey.hideSideBarLabel, defaultValue: false);
 
   static bool get dynamicsShowAllFollowedUp => _setting.get(
     SettingBoxKey.dynamicsShowAllFollowedUp,
@@ -1126,6 +1257,9 @@ abstract final class Pref {
   static bool get enableShowLiveDanmaku =>
       _setting.get(SettingBoxKey.enableShowLiveDanmaku, defaultValue: true);
 
+  static bool get enableDanmakuMask =>
+      _setting.get(SettingBoxKey.enableDanmakuMask, defaultValue: false);
+
   static bool get enableQuickFav =>
       _setting.get(SettingBoxKey.enableQuickFav, defaultValue: false);
 
@@ -1139,9 +1273,6 @@ abstract final class Pref {
       !Platform.isIOS &&
       _setting.get(SettingBoxKey.dynamicColor, defaultValue: true);
 
-  static bool get autoClearCache =>
-      _setting.get(SettingBoxKey.autoClearCache, defaultValue: false);
-
   static bool get enableSystemProxy =>
       _setting.get(SettingBoxKey.enableSystemProxy, defaultValue: false);
 
@@ -1154,6 +1285,12 @@ abstract final class Pref {
         defaultValue: ReplySortType.hot.index,
       )];
 
+  static ReplySortType get reply2SortType =>
+      ReplySortType.values[_setting.get(
+        SettingBoxKey.reply2SortType,
+        defaultValue: ReplySortType.time.index,
+      )];
+
   static DynamicBadgeMode get dynamicBadgeMode =>
       DynamicBadgeMode.values[_setting.get(
         SettingBoxKey.dynamicBadgeMode,
@@ -1162,6 +1299,9 @@ abstract final class Pref {
 
   static bool get enableMYBar =>
       _setting.get(SettingBoxKey.enableMYBar, defaultValue: true);
+
+  static bool get enableGradientBg =>
+      _setting.get(SettingBoxKey.enableGradientBg, defaultValue: false);
 
   static Transition get pageTransition =>
       Transition.values[_setting.get(
@@ -1227,8 +1367,52 @@ abstract final class Pref {
   static bool get enableLongShowControl =>
       _setting.get(SettingBoxKey.enableLongShowControl, defaultValue: false);
 
-  static bool get expandBuffer =>
-      _setting.get(SettingBoxKey.expandBuffer, defaultValue: false);
+  static bool get showControlsOnManualEpisodeChange => _setting.get(
+    SettingBoxKey.showControlsOnManualEpisodeChange,
+    defaultValue: false,
+  );
+
+  static double get bufferSize =>
+      _setting.get(SettingBoxKey.bufferSize, defaultValue: 4.0);
+
+  static double get bufferSec =>
+      _setting.get(SettingBoxKey.bufferSec, defaultValue: 16.0);
+
+  /// 直播流前向缓冲区大小（MB），0 表示跟随 [bufferSize] 的两倍
+  static double get liveBufferSize =>
+      _setting.get(SettingBoxKey.liveBufferSize, defaultValue: 0.0);
+
+  /// 直播流缓冲时长上限（s），0 表示不限制
+  static double get liveBufferSec =>
+      _setting.get(SettingBoxKey.liveBufferSec, defaultValue: 0.0);
+
+  static Map<String, String> initBuffer([double playbackSpeed = 1.0]) {
+    final bufSec = Pref.bufferSec * playbackSpeed;
+    final bufSiz = (Pref.bufferSize * 0x100000).toStringAsFixed(0);
+    return {
+      'cache': 'yes',
+      'cache-secs': bufSec.toStringAsFixed(3),
+      'demuxer-hysteresis-secs': (bufSec / 1.5).toStringAsFixed(3),
+      'demuxer-max-bytes': bufSiz,
+      'demuxer-max-back-bytes': bufSiz,
+    };
+  }
+
+  static Map<String, String> initLiveBuffer() {
+    final liveBufMb = liveBufferSize;
+    final effectiveSizeMb = liveBufMb > 0 ? liveBufMb : bufferSize * 2;
+    final buffer = {
+      'cache': 'yes',
+      'demuxer-max-bytes': (effectiveSizeMb * 0x100000).toStringAsFixed(0),
+      'demuxer-max-back-bytes': '0',
+    };
+    final sec = Pref.liveBufferSec;
+    if (sec > 0) {
+      buffer['cache-secs'] = sec.toStringAsFixed(3);
+      buffer['demuxer-hysteresis-secs'] = (sec / 1.5).toStringAsFixed(3);
+    }
+    return buffer;
+  }
 
   static String get audioOutput => _setting.get(
     SettingBoxKey.audioOutput,
@@ -1243,6 +1427,9 @@ abstract final class Pref {
 
   static bool get enableOnlineTotal =>
       _setting.get(SettingBoxKey.enableOnlineTotal, defaultValue: false);
+
+  static bool get enableDmCount =>
+      _setting.get(SettingBoxKey.enableDmCount, defaultValue: false);
 
   static bool get autoEnterFullScreen =>
       _setting.get(SettingBoxKey.enableAutoEnter, defaultValue: false);
@@ -1261,6 +1448,9 @@ abstract final class Pref {
 
   static bool get swapReplyLikeDislike =>
       _setting.get(SettingBoxKey.swapReplyLikeDislike, defaultValue: false);
+
+  static bool get remarkReplaceName =>
+      _setting.get(SettingBoxKey.remarkReplaceName, defaultValue: false);
 
   static bool get enableTrending =>
       _setting.get(SettingBoxKey.enableHotKey, defaultValue: true);
@@ -1285,6 +1475,11 @@ abstract final class Pref {
 
   static bool get continuePlayInBackground =>
       _setting.get(SettingBoxKey.continuePlayInBackground, defaultValue: false);
+
+  static bool get autoAudioOnlyInBackground => _setting.get(
+    SettingBoxKey.autoAudioOnlyInBackground,
+    defaultValue: false,
+  );
 
   static bool get directExitOnBack =>
       _setting.get(SettingBoxKey.directExitOnBack, defaultValue: false);
@@ -1311,16 +1506,29 @@ abstract final class Pref {
   static bool get showFsLockBtn =>
       _setting.get(SettingBoxKey.showFsLockBtn, defaultValue: true);
 
+  static bool get showFsLockBtnRight =>
+      _setting.get(SettingBoxKey.showFsLockBtnRight, defaultValue: false);
+
+  static bool get lockFsRotation =>
+      _setting.get(SettingBoxKey.lockFsRotation, defaultValue: false);
+
   static bool get silentDownImg =>
       _setting.get(SettingBoxKey.silentDownImg, defaultValue: false);
 
   static String get buvid {
-    String? buvid = _localCache.get(LocalCacheKey.buvid);
-    if (buvid == null) {
-      buvid = LoginUtils.generateBuvid();
-      _localCache.put(LocalCacheKey.buvid, buvid);
+    String? value = _setting.get(SettingBoxKey.buvid);
+    if (value != null) return value;
+
+    value = _localCache.get(SettingBoxKey.buvid);
+    if (value != null) {
+      _setting.put(SettingBoxKey.buvid, value);
+      _localCache.delete(SettingBoxKey.buvid);
+    } else {
+      value = LoginUtils.generateBuvid();
+      GStorage.setting.put(SettingBoxKey.buvid, value);
     }
-    return buvid;
+
+    return value;
   }
 
   static bool get showMemberShop =>
@@ -1342,6 +1550,15 @@ abstract final class Pref {
     SettingBoxKey.fullScreenSCWidth,
     defaultValue: kFullScreenSCWidth,
   );
+
+  static bool get enableFullScreenSC =>
+      _setting.get(SettingBoxKey.enableFullScreenSC, defaultValue: true);
+
+  static double get fullScreenSCOpacity =>
+      _setting.get(SettingBoxKey.fullScreenSCOpacity, defaultValue: 1.0);
+
+  static double get fullScreenSCScale =>
+      _setting.get(SettingBoxKey.fullScreenSCScale, defaultValue: 1.0);
 
   static bool get minimizeOnExit =>
       _setting.get(SettingBoxKey.minimizeOnExit, defaultValue: true);
@@ -1404,6 +1621,8 @@ abstract final class Pref {
 
   static String? get downloadPath => _setting.get(SettingBoxKey.downloadPath);
 
+  static String? get imageSavePath => _setting.get(SettingBoxKey.imageSavePath);
+
   static String? get liveCdnUrl => _setting.get(SettingBoxKey.liveCdnUrl);
 
   static bool get showBatteryLevel => _setting.get(
@@ -1433,6 +1652,11 @@ abstract final class Pref {
 
   static bool get floatingNavBar =>
       _setting.get(SettingBoxKey.floatingNavBar, defaultValue: false);
+
+  static bool get enableCurrentPageRefresh => _setting.get(
+    SettingBoxKey.enableCurrentPageRefresh,
+    defaultValue: false,
+  );
 
   static bool get removeSafeArea =>
       _setting.get(SettingBoxKey.removeSafeArea, defaultValue: false);
@@ -1486,6 +1710,131 @@ abstract final class Pref {
   static set aiPromptTemplates(String value) =>
       _setting.put(SettingBoxKey.aiPromptTemplates, value);
 
+  static bool get aiAutoScroll =>
+      _setting.get(SettingBoxKey.aiAutoScroll, defaultValue: true);
+
+  static set aiAutoScroll(bool value) =>
+      _setting.put(SettingBoxKey.aiAutoScroll, value);
+
+  /// 思考强度（reasoning_effort）：未干预服务商默认行为时为 'default'。
+  static String get aiReasoningEffort {
+    final value =
+        _setting.get(SettingBoxKey.aiReasoningEffort, defaultValue: 'default');
+    return value == 'auto' ? 'default' : value;
+  }
+
+  static set aiReasoningEffort(String value) =>
+      _setting.put(SettingBoxKey.aiReasoningEffort, value);
+
   static int get angleDegrees =>
       _setting.get(SettingBoxKey.angleDegrees, defaultValue: 30);
+
+  static double get playerVolume => // mobile
+      _setting.get(SettingBoxKey.playerVolume, defaultValue: 100.0);
+
+  static double get maxVolume => // desktop
+      _setting.get(SettingBoxKey.maxVolume, defaultValue: 2.0);
+
+  static int _videoPictureParameter(String key) {
+    final value = _setting.get(key, defaultValue: 0);
+    final number = value is num ? value.round() : int.tryParse('$value') ?? 0;
+    return number.clamp(-100, 100).toInt();
+  }
+
+  static int get videoBrightness =>
+      _videoPictureParameter(SettingBoxKey.videoBrightness);
+
+  static int get videoContrast =>
+      _videoPictureParameter(SettingBoxKey.videoContrast);
+
+  static int get videoSaturation =>
+      _videoPictureParameter(SettingBoxKey.videoSaturation);
+
+  static int get videoGamma => _videoPictureParameter(SettingBoxKey.videoGamma);
+
+  static int get videoHue => _videoPictureParameter(SettingBoxKey.videoHue);
+
+  static int get audioDelayMs {
+    final value = _setting.get(SettingBoxKey.audioDelayMs, defaultValue: 0);
+    final number = value is num ? value.round() : int.tryParse('$value') ?? 0;
+    return number.clamp(-1000, 1000).toInt();
+  }
+
+  static List? get liveStream => _setting.get(SettingBoxKey.liveStream);
+
+  static String? get appFont => _setting.get(SettingBoxKey.appFont);
+
+  static bool get enableDocProvider =>
+      _setting.get(SettingBoxKey.enableDocProvider, defaultValue: false);
+
+  static Map<String, String> get customAppFont => Map<String, String>.from(
+    _setting.get(
+      SettingBoxKey.customAppFont,
+      defaultValue: const <String, String>{},
+    ),
+  );
+
+  /// 已导入字体的显示名：字体族名 → 从字体文件解析出的名字
+  static Map<String, String> get customAppFontNames => Map<String, String>.from(
+    _setting.get(
+      SettingBoxKey.customAppFontNames,
+      defaultValue: const <String, String>{},
+    ),
+  );
+
+  static bool get enableEmoteTooltip =>
+      _setting.get(SettingBoxKey.enableEmoteTooltip, defaultValue: false);
+
+  static Set<MineTabType> get mineTabs {
+    final cache = _setting.get(SettingBoxKey.mineTabs) as List?;
+    if (cache != null && cache.isNotEmpty) {
+      return cache
+          .whereType<int>()
+          .where((i) => i >= 0 && i < MineTabType.values.length)
+          .map((i) => MineTabType.values[i])
+          .toSet();
+    }
+    // 旧版「我的页卡片编辑」键 mineCardSort 存的是 MineCardType 索引：
+    // history=0, fav=1, toView=2 → history / favorite / later
+    final legacy = _setting.get(SettingBoxKey.mineCardSort) as List?;
+    if (legacy != null && legacy.isNotEmpty) {
+      const legacyMap = <int, MineTabType>{
+        0: MineTabType.history,
+        1: MineTabType.favorite,
+        2: MineTabType.later,
+      };
+      final tabs = legacy
+          .whereType<int>()
+          .map((i) => legacyMap[i])
+          .whereType<MineTabType>()
+          .toSet();
+      if (tabs.isNotEmpty) {
+        _setting.put(
+          SettingBoxKey.mineTabs,
+          tabs.map((e) => e.index).toList(),
+        );
+        _setting.delete(SettingBoxKey.mineCardSort);
+        return tabs;
+      }
+    }
+    return MineTabType.kDefault;
+  }
+
+  static bool get blockAtOnlyReply =>
+      _setting.get(SettingBoxKey.blockAtOnlyReply, defaultValue: false);
+
+  static int? get blockReplyAtCount =>
+      _setting.get(SettingBoxKey.blockReplyAtCount);
+
+  static bool get filterIntro =>
+      _setting.get(SettingBoxKey.filterIntro, defaultValue: false);
+
+  static int get foldDepth =>
+      _setting.get(SettingBoxKey.foldDepth, defaultValue: 0);
+
+  static bool get showRefreshFAB =>
+      _setting.get(SettingBoxKey.showRefreshFAB, defaultValue: true);
+
+  static bool get cachePlayInfo =>
+      _setting.get(SettingBoxKey.cachePlayInfo, defaultValue: true);
 }

@@ -3,6 +3,7 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/msg.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
+import 'package:PiliPlus/pages/common/common_controller.dart';
 import 'package:PiliPlus/pages/common/common_list_controller.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
@@ -13,12 +14,13 @@ import 'package:get/get.dart';
 
 class DynamicsTabController
     extends CommonListController<DynamicsDataModel, DynamicItemModel>
-    with AccountMixin {
+    with AccountMixin, RefreshImplMixin {
   DynamicsTabController({required this.dynamicsType});
   final DynamicsTabType dynamicsType;
-  String offset = '';
-  int? mid;
-  late final MainController mainController = Get.find<MainController>();
+
+  String? offset;
+
+  late final mainController = Get.find<MainController>();
   final dynamicsController = Get.find<DynamicsController>();
 
   @override
@@ -29,25 +31,25 @@ class DynamicsTabController
 
   @override
   Future<void> onRefresh() {
-    if (dynamicsType == DynamicsTabType.all) {
+    if (dynamicsType == .all) {
       mainController.setDynCount();
     }
-    offset = '';
+    offset = null;
     return super.onRefresh();
   }
 
   @override
   List<DynamicItemModel>? getDataList(DynamicsDataModel response) {
-    offset = response.offset ?? '';
+    offset = response.offset;
     return response.items;
   }
 
   @override
   Future<LoadingState<DynamicsDataModel>> customGetData() =>
       DynamicsHttp.followDynamic(
-        type: dynamicsType,
         offset: offset,
-        mid: mid,
+        type: dynamicsType,
+        hostMid: dynamicsController.hostMid,
         tempBannedList: dynamicsController.tempBannedList,
       );
 
@@ -70,7 +72,7 @@ class DynamicsTabController
   }
 
   void onBlock(int index) {
-    if (dynamicsType != DynamicsTabType.up) {
+    if (dynamicsType != .up) {
       loadingState
         ..value.data!.removeAt(index)
         ..refresh();

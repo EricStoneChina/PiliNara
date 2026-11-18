@@ -1,4 +1,3 @@
-import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/models/common/enum_with_label.dart';
 import 'package:PiliPlus/pages/setting/widgets/normal_item.dart';
 import 'package:PiliPlus/pages/setting/widgets/popup_item.dart';
@@ -6,10 +5,11 @@ import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/switch_item.dart';
 import 'package:PiliPlus/pages/setting/widgets/list_editor_dialog.dart';
 import 'package:PiliPlus/utils/storage.dart';
-import 'package:flutter/material.dart' hide PopupMenuItemSelected;
+import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart' hide PopupMenuItemSelected;
 
 @immutable
 sealed class SettingsModel {
@@ -29,6 +29,30 @@ sealed class SettingsModel {
     this.contentPadding,
     this.titleStyle,
   });
+}
+
+class WidgetModel extends SettingsModel {
+  const WidgetModel({
+    required this.child,
+    this.searchTitle = '',
+    this.searchSubtitle,
+  });
+
+  final Widget child;
+  final String searchTitle;
+  final String? searchSubtitle;
+
+  @override
+  String? get title => null;
+
+  @override
+  String get effectiveTitle => searchTitle;
+
+  @override
+  String? get effectiveSubtitle => searchSubtitle;
+
+  @override
+  Widget get widget => child;
 }
 
 class SplitModel extends SettingsModel {
@@ -89,7 +113,7 @@ class PopupModel<T extends EnumWithLabel> extends SettingsModel {
   final String title;
 
   final ValueGetter<T> value;
-  final List<T> items;
+  final Iterable<T> items;
   final PopupMenuItemSelected<T> onSelected;
 
   @override
@@ -207,106 +231,53 @@ class SwitchModel extends SettingsModel {
   );
 }
 
-/// Creates a list-based keyword filter model using ListEditorDialog
-/// Items are stored as newline-separated strings (instead of pipe-separated)
-/// to support regex patterns containing '|' character
-///
 /// 使用 getListBanWordModel 替代了上游的 getBanWordModel
+///
+/// 列表项逐个编译为独立正则（见 `Pref.compileBanWord`），不再拼接成一条
+/// pattern，避免 `\N` 反向引用、具名组与非法项在列表项之间相互影响。
 SettingsModel getListBanWordModel({
   required String title,
   required String key,
-  required ValueChanged<RegExp> onChanged,
+  required ValueChanged<List<RegExp>> onChanged,
+  String? banScope,
 }) {
   String banWord = GStorage.setting.get(key, defaultValue: '');
-
-  // Helper function to parse stored data with backward compatibility
-  List<String> parseItems(String data) {
-    if (data.isEmpty) return [];
-
-    // Check if it's the old pipe-separated format (no newlines)
-    // If it contains no newlines but has pipes, it's likely old format
-    if (!data.contains('\n') && data.contains('|')) {
-      // Old format: pipe-separated
-      final parts = data
-          .split('|')
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
-
-      // Heuristic: check for complex regex
-      if (parts.length > 1) {
-        final hasComplexRegex = parts.any(
-          (p) =>
-              p.contains('(') ||
-              p.contains('[') ||
-              p.contains('{') ||
-              p.contains('\\') ||
-              p.contains('^') ||
-              p.contains('\$'),
-        );
-
-        if (!hasComplexRegex) {
-          // Old format with simple keywords - migrate
-          return parts;
-        }
-      }
-
-      // Might be a single complex regex pattern - keep as single item
-      return [data];
-    }
-
-    // New format: newline-separated
-    return data
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
-
-  // Helper function to join items using newline
-  String joinItems(List<String> items) {
-    return items.join('\n');
-  }
 
   return NormalModel(
     leading: const Icon(Icons.filter_alt_outlined),
     title: title,
     getSubtitle: () {
       if (banWord.isEmpty) return "点击添加";
-      final items = parseItems(banWord);
-      return items.isEmpty ? "点击添加" : '${items.length} 个关键词';
+      final items = Pref.parseBanWordItems(banWord);
+      final subtitle = items.isEmpty
+          ? "点击添加"
+          : '${items.length} 个关键词';
+      // banScope 来自上游，用于在副标题里标注过滤作用域
+      if (banScope == null) return subtitle;
+      return '作用域: $banScope\n$subtitle';
     },
     onTap: (context, setState) async {
-      final items = parseItems(banWord);
-
       final result = await showDialog<List<String>>(
         context: context,
         builder: (context) {
           return ListEditorDialog(
             title: title,
-            initialItems: items,
+            initialItems: Pref.parseBanWordItems(banWord),
             hintText: '输入关键词或正则表达式',
             itemLabel: '关键词',
+            // 每项都是独立正则，非法项在编译时会被跳过，在源头拦下
+            validator: (value) =>
+                Pref.isBanWordPatternValid(value) ? null : '无效的正则表达式',
+            // 已存的历史项不经过 validator，打开时逐项标记
+            patternValidator: Pref.isBanWordPatternValid,
           );
         },
       );
 
       if (result != null) {
-        banWord = joinItems(result);
+        banWord = result.join('\n');
         setState();
-        // Build regex by joining all patterns with alternation
-        final regexPattern = result.isEmpty
-            ? ''
-            : result
-                  .map((item) {
-                    // If the item is already a complex pattern, wrap in non-capturing group
-                    if (item.contains('|') && !item.startsWith('(')) {
-                      return '($item)';
-                    }
-                    return item;
-                  })
-                  .join('|');
-        onChanged(RegExp(regexPattern, caseSensitive: false));
+        onChanged(Pref.compileBanWord(banWord));
         SmartDialog.showToast('已保存');
         GStorage.setting.put(key, banWord);
       }
@@ -461,6 +432,7 @@ SettingsModel getVideoFilterSelectModel({
   required List<int> values,
   int defaultValue = 0,
   bool isFilter = true,
+  String? filterScope,
   ValueChanged<int>? onChanged,
 }) {
   assert(!isFilter || onChanged != null);
@@ -470,9 +442,16 @@ SettingsModel getVideoFilterSelectModel({
     leading: const Icon(Icons.timelapse_outlined),
     subtitle: subtitle,
     getSubtitle: subtitle == null
-        ? () => isFilter
-              ? '过滤掉$title小于「$value${suffix ?? ""}」的视频'
-              : '当前$title:「$value${suffix ?? ""}」'
+        ? () {
+            if (isFilter) {
+              final subtitle = '过滤掉$title小于「$value${suffix ?? ""}」的视频';
+              if (filterScope != null) {
+                return '作用域: $filterScope\n$subtitle';
+              }
+              return subtitle;
+            }
+            return '当前$title:「$value${suffix ?? ""}」';
+          }
         : null,
     onTap: (context, setState) async {
       var result = await showDialog<int>(

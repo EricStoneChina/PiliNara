@@ -1,6 +1,8 @@
 import 'package:PiliPlus/http/video.dart';
+import 'package:PiliPlus/models/common/rcmd_source.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
+import 'package:PiliPlus/pages/setting/widgets/ordered_multi_select_dialog.dart';
 import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/recommend_filter.dart';
 import 'package:PiliPlus/utils/storage.dart';
@@ -8,18 +10,17 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/user_whitelist.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
+import 'package:material_ui/material_ui.dart';
 
 List<SettingsModel> get recommendSettings => [
-  const SwitchModel(
-    title: '首页使用app端推荐',
-    subtitle: '若web端推荐不太符合预期，可尝试切换至app端推荐',
-    leading: Icon(Icons.model_training_outlined),
-    setKey: SettingBoxKey.appRcmd,
-    defaultVal: true,
-    needReboot: true,
+  NormalModel(
+    title: '首页推荐来源',
+    leading: const Icon(Icons.model_training_outlined),
+    getSubtitle: () => Pref.rcmdSources.map((e) => e.label).join(' → '),
+    onTap: _showRcmdModeDialog,
   ),
   SwitchModel(
     title: '保留首页推荐刷新',
@@ -59,25 +60,36 @@ List<SettingsModel> get recommendSettings => [
     key: SettingBoxKey.minLikeRatioForRecommend,
     values: [0, 1, 2, 3, 4],
     onChanged: (value) => RecommendFilter.minLikeRatioForRecommend = value,
+    filterScope: 'Web推荐、热门、分区',
   ),
   getListBanWordModel(
     title: '标题关键词过滤',
     key: SettingBoxKey.banWordForRecommend,
     onChanged: (value) {
       RecommendFilter.rcmdRegExp = value;
-      RecommendFilter.enableFilter = value.pattern.isNotEmpty;
+      RecommendFilter.enableFilter = value.isNotEmpty;
+    },
+    banScope: '推荐、热门、分区、相关视频',
+  ),
+  getListBanWordModel(
+    title: 'UP名称关键词过滤',
+    key: SettingBoxKey.banWordForRecommendUpName,
+    onChanged: (value) {
+      RecommendFilter.rcmdUpNameRegExp = value;
+      RecommendFilter.enableUpNameFilter = value.isNotEmpty;
     },
   ),
   getListBanWordModel(
-    title: 'App推荐/热门/排行榜: 视频分区关键词过滤',
+    title: '分区关键词过滤',
     key: SettingBoxKey.banWordForZone,
     onChanged: (value) {
       VideoHttp.zoneRegExp = value;
-      VideoHttp.enableFilter = value.pattern.isNotEmpty;
+      VideoHttp.enableFilter = value.isNotEmpty;
     },
+    banScope: 'App推荐、热门、分区',
   ),
   getListUidWithNameModel(
-    title: '屏蔽用户',
+    title: '推荐屏蔽用户',
     getUidsMap: () => Pref.recommendBlockedMids,
     setUidsMap: (uidsMap) {
       Pref.recommendBlockedMids = uidsMap;
@@ -89,7 +101,7 @@ List<SettingsModel> get recommendSettings => [
     },
   ),
   getListUidWithNameModel(
-    title: '白名单用户',
+    title: '推荐白名单用户',
     leading: const Icon(Icons.person_add_alt_1_outlined),
     emptySubtitle: '点击添加白名单用户',
     countSubtitleBuilder: (count) => '已加入白名单 $count 个用户',
@@ -105,28 +117,30 @@ List<SettingsModel> get recommendSettings => [
     key: SettingBoxKey.minDurationForRcmd,
     values: [0, 30, 60, 90, 120],
     onChanged: (value) => RecommendFilter.minDurationForRcmd = value,
+    filterScope: '推荐、相关视频',
   ),
   getVideoFilterSelectModel(
     title: '播放量',
     key: SettingBoxKey.minPlayForRcmd,
     values: [0, 50, 100, 500, 1000],
     onChanged: (value) => RecommendFilter.minPlayForRcmd = value,
+    filterScope: '推荐、热门、分区、相关视频',
   ),
   NormalModel(
     title: '屏蔽无权查看视频',
     leading: const Icon(Icons.block_outlined),
-    getSubtitle: () => Pref.appRcmd
+    getSubtitle: () => Pref.rcmdSources.contains(RcmdSource.app)
         ? '仅对首页 app 端推荐生效，屏蔽无权查看的视频(如充电专属视频)'
-        : '仅对首页 app 端推荐生效，请先开启“首页使用app端推荐”',
+        : '仅对首页 app 端推荐生效，请先在推荐来源中选择App端',
     getTrailing: (_) => StreamBuilder<BoxEvent>(
       stream: GStorage.setting.watch().where(
         (event) =>
-            event.key == SettingBoxKey.appRcmd ||
+            event.key == SettingBoxKey.rcmdSources ||
             event.key == SettingBoxKey.removeBlockedRcmd,
       ),
-      builder: (_, __) => Switch(
+      builder: (_, _) => Switch(
         value: Pref.removeBlockedRcmd,
-        onChanged: Pref.appRcmd
+        onChanged: Pref.rcmdSources.contains(RcmdSource.app)
             ? (value) {
                 GStorage.setting.put(SettingBoxKey.removeBlockedRcmd, value);
               }
@@ -134,7 +148,7 @@ List<SettingsModel> get recommendSettings => [
       ),
     ),
     onTap: (context, setState) {
-      if (!Pref.appRcmd) {
+      if (!Pref.rcmdSources.contains(RcmdSource.app)) {
         return;
       }
       GStorage.setting.put(
@@ -153,8 +167,8 @@ List<SettingsModel> get recommendSettings => [
     onChanged: (value) => RecommendFilter.exemptFilterForFollowed = value,
   ),
   SwitchModel(
-    title: '过滤器也应用于相关视频',
-    subtitle: '视频详情页的相关视频也进行过滤¹',
+    title: '过滤器也应用于详情页相关视频',
+    subtitle: '其它（如热门视频、搜索等）均不受过滤器影响，无法豁免相关视频中的已关注UP',
     leading: const Icon(Icons.explore_outlined),
     setKey: SettingBoxKey.applyFilterToRelatedVideos,
     defaultVal: true,
@@ -162,7 +176,7 @@ List<SettingsModel> get recommendSettings => [
   ),
   SwitchModel(
     title: '过滤器也应用于热门视频',
-    subtitle: '开启后对热门视频应用完整过滤（标题关键词、时长、播放量、点赞率、屏蔽用户）',
+    subtitle: '开启后对热门视频应用完整过滤（标题和UP名称关键词、时长、播放量、点赞率、屏蔽用户）',
     leading: const Icon(Icons.local_fire_department_outlined),
     setKey: SettingBoxKey.applyFilterToHotVideos,
     defaultVal: false,
@@ -184,4 +198,54 @@ List<SettingsModel> get recommendSettings => [
     defaultVal: false,
     onChanged: (value) => RecommendFilter.applyFilterToSearch = value,
   ),
+  WidgetModel(
+    searchTitle: '推荐过滤说明',
+    searchSubtitle: '手动搜索、链接跳转不受过滤器影响',
+    child: Builder(
+      builder: (context) {
+        final theme = Theme.of(context);
+        return ListTile(
+          dense: true,
+          subtitle: Text(
+            '¹ 由于接口未提供关注信息，无法豁免相关视频中的已关注Up。\n\n'
+            '* 手动搜索、链接跳转等均不受过滤器影响。\n'
+            '* 推荐流屏蔽用户优先于白名单生效。\n'
+            '* 白名单用户与动态流/评论区共享，白名单优先于常规过滤。\n'
+            '* 设定较严苛的条件可导致推荐项数锐减或多次请求，请酌情选择。\n'
+            '* 后续可能会增加更多过滤条件，敬请期待。',
+            style: theme.textTheme.labelSmall!.copyWith(
+              color: theme.colorScheme.outline.withValues(alpha: 0.7),
+            ),
+          ),
+        );
+      },
+    ),
+  ),
 ];
+
+Future<void> _showRcmdModeDialog(
+  BuildContext context,
+  VoidCallback setState,
+) async {
+  final res = await showDialog<List<RcmdSource>>(
+    context: context,
+    builder: (context) => OrderedMultiSelectDialog<RcmdSource>(
+      title: const Text('推荐来源（按勾选顺序混排）'),
+      initValues: Pref.rcmdSources,
+      values: {for (final source in RcmdSource.values) source: source.label},
+      minSelections: 1,
+      subtitleBuilder: (context, source) => Text(switch (source) {
+        RcmdSource.app => '使用 App 端推荐',
+        RcmdSource.web => '使用网页首页推荐',
+        RcmdSource.desktop => '使用官方 Windows 客户端的推荐参数',
+      }),
+    ),
+  );
+  if (res == null || res.isEmpty) return;
+  await Pref.setRcmdSources(res);
+  setState();
+  if (Get.isRegistered<RcmdController>()) {
+    Get.find<RcmdController>().switchSources(res);
+  }
+  SmartDialog.showToast('已切换为${res.map((e) => e.label).join(' → ')}');
+}

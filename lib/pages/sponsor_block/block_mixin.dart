@@ -1,6 +1,7 @@
 import 'dart:async' show StreamSubscription, Timer;
 import 'dart:math' as math;
 
+import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/segment_progress_bar.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/sponsor_block.dart';
@@ -12,10 +13,10 @@ import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 
 mixin BlockConfigMixin {
@@ -24,8 +25,9 @@ mixin BlockConfigMixin {
   late final enableSponsorBlock = Pref.enableSponsorBlock;
   late final enableBlock = enableSponsorBlock || enablePgcSkip;
   late final blockColor = Pref.blockColor;
-  late final blockLimit = Pref.blockLimit;
+  late final blockLimit = Pref.blockLimit * 1000;
   late final blockSettings = Pref.blockSettings;
+  late final blockSkipWhenSeekIntoSegment = Pref.blockSkipWhenSeekIntoSegment;
   late final enableList = blockSettings
       .where((item) => item.second != SkipType.disable)
       .map((item) => item.first.name)
@@ -57,6 +59,7 @@ mixin BlockMixin on GetxController {
   bool get isFullScreen => false;
 
   bool get isUgc;
+  bool get isFileSource => false;
   late final isBlock = isUgc || !blockConfig.enablePgcSkip;
 
   Future<void> querySponsorBlock({
@@ -79,40 +82,59 @@ mixin BlockMixin on GetxController {
 
   void initSkip() {
     if (isClosed) return;
-    if (_segmentList.isNotEmpty) {
-      _blockListener?.cancel();
-      _blockListener = player?.stream.position.listen((position) {
-        int currentPos = position.inSeconds;
-        if (currentPos != _lastBlockPos) {
-          _lastBlockPos = currentPos;
-          final msPos = currentPos * 1000;
-          for (SegmentModel item in _segmentList) {
-            // if (kDebugMode) {
-            //   debugPrint(
-            //       '${position.inSeconds},,${item.segment.first},,${item.segment.second},,${item.skipType.name},,${item.hasSkipped}');
-            // }
-            if (msPos <= item.segment.$1 && item.segment.$1 <= msPos + 1000) {
-              switch (item.skipType) {
-                case SkipType.alwaysSkip:
-                  onSkip(item, isSeek: false);
-                  break;
-                case SkipType.skipOnce:
-                  if (!item.hasSkipped) {
-                    item.hasSkipped = true;
-                    onSkip(item, isSeek: false);
-                  }
-                  break;
-                case SkipType.skipManually:
-                  onAddItem(item);
-                  break;
-                default:
-                  break;
+    final currentPlayer = player;
+    if (_segmentList.isEmpty || currentPlayer == null) return;
+    cancelBlockListener();
+    // buffer 是无重放广播流，离线或已缓冲的视频可能不再发出 buffer 事件。
+    _blockListener = currentPlayer.stream.position.listen((position) {
+      if (!isClosed && identical(player, currentPlayer) &&
+          currentPlayer.state.duration > Duration.zero) {
+        _onPosChanged(position);
+      }
+    });
+  }
+
+  void _onPosChanged(Duration position) {
+    final currentPos = position.inSeconds;
+    if (currentPos != _lastBlockPos) {
+      _lastBlockPos = currentPos;
+      final msPos = position.inMilliseconds;
+      for (SegmentModel item in _segmentList) {
+        // if (kDebugMode) {
+        //   debugPrint(
+        //       '${position.inSeconds},,${item.segment.first},,${item.segment.second},,${item.skipType.name},,${item.hasSkipped}');
+        // }
+        if (msPos >= item.segment.$1 && msPos < item.segment.$2 &&
+            (blockConfig.blockSkipWhenSeekIntoSegment ||
+                msPos - item.segment.$1 < 1000)) {
+          switch (item.skipType) {
+            case SkipType.alwaysSkip:
+              onSkip(item);
+              break;
+            case SkipType.skipOnce:
+              if (!item.hasSkipped) {
+                item.hasSkipped = true;
+                onSkip(item);
               }
               break;
-            }
+            case SkipType.skipManually:
+              if (!item.hasSkipped) {
+                item.hasSkipped = true;
+                onAddItem(item);
+              }
+              break;
+            default:
+              break;
+          }
+          break;
+        } else {
+          switch (item.skipType) {
+            case .skipManually:
+              item.hasSkipped = false;
+            default:
           }
         }
-      });
+      }
     }
   }
 
@@ -121,9 +143,9 @@ mixin BlockMixin on GetxController {
     bool? useBlockConfig,
     bool? isBlockSource,
   }) async {
+    if (isClosed) return;
     if (list.isNotEmpty) {
       try {
-        Future<void>? future;
         final effectiveIsBlock = isBlockSource ?? isBlock;
         final effectiveUseBlockConfig = useBlockConfig ?? effectiveIsBlock;
         final duration = list.first.videoDuration ?? timeLength!;
@@ -148,39 +170,6 @@ mixin BlockMixin on GetxController {
                         '${videoLabel!.value.isNotEmpty ? '/' : ''}${segmentModel.segmentType.title}';
                   }
 
-                  if (_blockListener == null && autoPlay && player != null) {
-                    final currPos = currPosInMilliseconds;
-
-                    if (segmentModel.segment.contains(currPos)) {
-                      _lastBlockPos = currPos;
-
-                      switch (segmentModel.skipType) {
-                        case SkipType.alwaysSkip:
-                        case SkipType.skipOnce:
-                          segmentModel.hasSkipped = true;
-                          if (player!.state.playing) {
-                            future = onSkip(
-                              segmentModel,
-                            );
-                          } else {
-                            player!.stream.playing.firstWhere((e) {
-                              if (e) {
-                                future = onSkip(segmentModel);
-                                return true;
-                              }
-                              return false;
-                            }, orElse: () => false);
-                          }
-                          break;
-                        case SkipType.skipManually:
-                          onAddItem(segmentModel);
-                          break;
-                        default:
-                          break;
-                      }
-                    }
-                  }
-
                   return segmentModel;
                 },
               ),
@@ -200,7 +189,6 @@ mixin BlockMixin on GetxController {
         );
 
         if (_blockListener == null && (autoPlay || preInitPlayer)) {
-          await future;
           initSkip();
         }
       } catch (e) {
@@ -249,7 +237,7 @@ mixin BlockMixin on GetxController {
     }
   }
 
-  Future<void>? seekTo(Duration duration, {required bool isSeek});
+  Future<void>? seekTo(Duration duration);
 
   void _skipToast(SegmentModel item) {
     if (autoPlay && Pref.blockToast) {
@@ -260,16 +248,9 @@ mixin BlockMixin on GetxController {
     }
   }
 
-  Future<void> onSkip(
-    SegmentModel item, {
-    bool isSkip = true,
-    bool isSeek = true,
-  }) async {
+  Future<void> onSkip(SegmentModel item, {bool isSkip = true}) async {
     try {
-      await seekTo(
-        Duration(milliseconds: item.segment.$2),
-        isSeek: isSeek,
-      );
+      await seekTo(Duration(milliseconds: item.segment.$2));
       if (isSkip) {
         _skipToast(item);
       } else {
@@ -295,40 +276,32 @@ mixin BlockMixin on GetxController {
   void _showVoteDialog(SegmentModel segment) {
     showDialog(
       context: Get.context!,
-      builder: (context) => AlertDialog(
-        clipBehavior: Clip.hardEdge,
-        contentPadding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                dense: true,
-                title: const Text('赞成票', style: TextStyle(fontSize: 14)),
-                onTap: () {
-                  Get.back();
-                  _doVote(segment.uuid, 1);
-                },
-              ),
-              ListTile(
-                dense: true,
-                title: const Text('反对票', style: TextStyle(fontSize: 14)),
-                onTap: () {
-                  Get.back();
-                  _doVote(segment.uuid, 0);
-                },
-              ),
-              ListTile(
-                dense: true,
-                title: const Text('更改类别', style: TextStyle(fontSize: 14)),
-                onTap: () {
-                  Get.back();
-                  _showCategoryDialog(segment);
-                },
-              ),
-            ],
+      builder: (context) => SimpleDialog(
+        clipBehavior: .hardEdge,
+        contentPadding: const .symmetric(vertical: 10),
+        children: [
+          DialogOption(
+            child: const Text('赞成票', style: TextStyle(fontSize: 14)),
+            onPressed: () {
+              Get.back();
+              _doVote(segment.uuid, 1);
+            },
           ),
-        ),
+          DialogOption(
+            child: const Text('反对票', style: TextStyle(fontSize: 14)),
+            onPressed: () {
+              Get.back();
+              _doVote(segment.uuid, 0);
+            },
+          ),
+          DialogOption(
+            child: const Text('更改类别', style: TextStyle(fontSize: 14)),
+            onPressed: () {
+              Get.back();
+              _showCategoryDialog(segment);
+            },
+          ),
+        ],
       ),
     );
   }
@@ -341,54 +314,49 @@ mixin BlockMixin on GetxController {
   void _showCategoryDialog(SegmentModel segment) {
     showDialog(
       context: Get.context!,
-      builder: (context) => AlertDialog(
-        clipBehavior: Clip.hardEdge,
-        contentPadding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: SegmentType.values
-                .map(
-                  (item) => ListTile(
-                    dense: true,
-                    onTap: () {
-                      Get.back();
-                      SponsorBlock.voteOnSponsorTime(
-                        uuid: segment.uuid,
-                        category: item,
-                      ).then((i) {
-                        SmartDialog.showToast(
-                          '类别更改${i.isSuccess ? '成功' : '失败: $i'}',
-                        );
-                      });
-                    },
-                    title: Text.rich(
-                      TextSpan(
-                        children: [
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            child: Container(
-                              height: 10,
-                              width: 10,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: blockConfig._getColor(item),
-                              ),
-                            ),
-                            style: const TextStyle(fontSize: 14, height: 1),
+      builder: (context) => SimpleDialog(
+        clipBehavior: .hardEdge,
+        contentPadding: const .symmetric(vertical: 10),
+        children: SegmentType.values
+            .map(
+              (item) => ListTile(
+                dense: true,
+                onTap: () {
+                  Get.back();
+                  SponsorBlock.voteOnSponsorTime(
+                    uuid: segment.uuid,
+                    category: item,
+                  ).then((i) {
+                    SmartDialog.showToast(
+                      '类别更改${i.isSuccess ? '成功' : '失败: $i'}',
+                    );
+                  });
+                },
+                title: Text.rich(
+                  TextSpan(
+                    children: [
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Container(
+                          height: 10,
+                          width: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: blockConfig._getColor(item),
                           ),
-                          TextSpan(
-                            text: ' ${item.title}',
-                            style: const TextStyle(fontSize: 14, height: 1),
-                          ),
-                        ],
+                        ),
+                        style: const TextStyle(fontSize: 14, height: 1),
                       ),
-                    ),
+                      TextSpan(
+                        text: ' ${item.title}',
+                        style: const TextStyle(fontSize: 14, height: 1),
+                      ),
+                    ],
                   ),
-                )
-                .toList(),
-          ),
-        ),
+                ),
+              ),
+            )
+            .toList(),
       ),
     );
   }
@@ -396,96 +364,90 @@ mixin BlockMixin on GetxController {
   void showSBDetail() {
     showDialog(
       context: Get.context!,
-      builder: (context) => AlertDialog(
+      builder: (context) => SimpleDialog(
         clipBehavior: Clip.hardEdge,
-        contentPadding: const EdgeInsets.fromLTRB(0, 10, 0, 10),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _segmentList
-                .map(
-                  (item) => ListTile(
-                    onTap: () {
-                      Get.back();
-                      if (_segmentSourceIsBlock) {
-                        _showVoteDialog(item);
-                      }
-                    },
-                    dense: true,
-                    title: Text.rich(
-                      TextSpan(
-                        children: [
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            child: Container(
-                              height: 10,
-                              width: 10,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: blockConfig._getColor(item.segmentType),
-                              ),
-                            ),
-                            style: const TextStyle(fontSize: 14, height: 1),
+        contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        children: _segmentList
+            .map(
+              (item) => ListTile(
+                onTap: () {
+                  Get.back();
+                  if (_segmentSourceIsBlock) {
+                    _showVoteDialog(item);
+                  }
+                },
+                dense: true,
+                title: Text.rich(
+                  TextSpan(
+                    children: [
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Container(
+                          height: 10,
+                          width: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: blockConfig._getColor(item.segmentType),
                           ),
-                          TextSpan(
-                            text: ' ${item.segmentType.title}',
-                            style: const TextStyle(fontSize: 14, height: 1),
-                          ),
-                        ],
+                        ),
+                        style: const TextStyle(fontSize: 14, height: 1),
                       ),
-                    ),
-                    contentPadding: const EdgeInsets.only(left: 16, right: 8),
-                    subtitle: Text(
-                      '${DurationUtils.formatDuration(item.segment.$1 / 1000)} 至 ${DurationUtils.formatDuration(item.segment.$2 / 1000)}',
+                      TextSpan(
+                        text: ' ${item.segmentType.title}',
+                        style: const TextStyle(fontSize: 14, height: 1),
+                      ),
+                    ],
+                  ),
+                ),
+                contentPadding: const EdgeInsets.only(left: 16, right: 8),
+                subtitle: Text(
+                  '${DurationUtils.formatDuration(item.segment.$1 / 1000)} 至 ${DurationUtils.formatDuration(item.segment.$2 / 1000)}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      item.skipType.label,
                       style: const TextStyle(fontSize: 13),
                     ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          item.skipType.label,
-                          style: const TextStyle(fontSize: 13),
+                    if (item.segment.$2 != 0)
+                      SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: IconButton(
+                          tooltip: item.skipType == SkipType.showOnly
+                              ? '跳至此片段'
+                              : '跳过此片段',
+                          onPressed: () {
+                            Get.back();
+                            onSkip(
+                              item,
+                              isSkip: item.skipType != SkipType.showOnly,
+                            );
+                          },
+                          style: IconButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: Icon(
+                            item.skipType == SkipType.showOnly
+                                ? Icons.my_location
+                                : MdiIcons.debugStepOver,
+                            size: 18,
+                            color: ColorScheme.of(
+                              context,
+                            ).onSurface.withValues(alpha: 0.7),
+                          ),
                         ),
-                        if (item.segment.$2 != 0)
-                          SizedBox(
-                            width: 36,
-                            height: 36,
-                            child: IconButton(
-                              tooltip: item.skipType == SkipType.showOnly
-                                  ? '跳至此片段'
-                                  : '跳过此片段',
-                              onPressed: () {
-                                Get.back();
-                                onSkip(
-                                  item,
-                                  isSkip: item.skipType != SkipType.showOnly,
-                                  isSeek: false,
-                                );
-                              },
-                              style: IconButton.styleFrom(
-                                padding: EdgeInsets.zero,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              icon: Icon(
-                                item.skipType == SkipType.showOnly
-                                    ? Icons.my_location
-                                    : MdiIcons.debugStepOver,
-                                size: 18,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurface.withValues(alpha: 0.7),
-                              ),
-                            ),
-                          )
-                        else
-                          const SizedBox(width: 10),
-                      ],
-                    ),
-                  ),
-                )
-                .toList(),
-          ),
-        ),
+                      )
+                    else
+                      const SizedBox(width: 10),
+                  ],
+                ),
+              ),
+            )
+            .toList(),
       ),
     );
   }
@@ -518,6 +480,7 @@ mixin BlockMixin on GetxController {
           _ => false,
         }) {
           _skipToast(i);
+          i.hasSkipped = true;
           pos = math.max(pos, i.segment.$2);
         }
       } else {

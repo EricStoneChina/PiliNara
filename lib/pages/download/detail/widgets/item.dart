@@ -1,32 +1,32 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
-import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/flutter/popup_menu.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/video_progress_indicator.dart';
 import 'package:PiliPlus/common/widgets/select_mask.dart';
 import 'package:PiliPlus/models/common/badge_type.dart';
-import 'package:PiliPlus/models/common/video/source_type.dart';
+import 'package:PiliPlus/models/common/sponsor_block/segment_type.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
-import 'package:PiliPlus/models_new/download/download_collection.dart';
+import 'package:PiliPlus/models_new/download/download_playback.dart';
 import 'package:PiliPlus/pages/common/multi_select/base.dart';
 import 'package:PiliPlus/pages/download/downloading/view.dart';
+import 'package:PiliPlus/pages/download/utils/cache_delete_confirm.dart';
+import 'package:PiliPlus/pages/download/utils/cache_export.dart';
+import 'package:PiliPlus/pages/download/utils/open_download_entry.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
-import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
-import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as path;
 
 class DetailItem extends StatelessWidget {
@@ -36,12 +36,10 @@ class DetailItem extends StatelessWidget {
     this.progress,
     required this.downloadService,
     this.onDelete,
-    this.onDeleteRequested,
     required this.showTitle,
     this.isCurr = false,
     this.playContext,
-    this.deleteLabel = '删除',
-    this.deleteConfirmText,
+    this.onPlayReturned,
     this.customOnLongPress,
     this.extraMoreItemsBuilder,
     this.enableTap = true,
@@ -56,12 +54,10 @@ class DetailItem extends StatelessWidget {
   final ChangeNotifier? progress;
   final DownloadService downloadService;
   final VoidCallback? onDelete;
-  final Future<void> Function(BuildContext context)? onDeleteRequested;
   final bool showTitle;
   final bool isCurr;
   final DownloadVideoPlayContext? playContext;
-  final String deleteLabel;
-  final String? deleteConfirmText;
+  final Future<void> Function()? onPlayReturned;
   final VoidCallback? customOnLongPress;
   final List<PopupMenuEntry<void>> Function(BuildContext context)?
   extraMoreItemsBuilder;
@@ -72,12 +68,33 @@ class DetailItem extends StatelessWidget {
   final bool? checked;
   final ValueChanged<BiliDownloadEntryInfo>? onSelect;
 
+  void showSegmentsDetail(BuildContext context) => showDialog(
+    context: context,
+    builder: (context) => SimpleDialog(
+      clipBehavior: .hardEdge,
+      contentPadding: const .symmetric(vertical: 10),
+      children: entry.segments!
+          .map(
+            (item) => ListTile(
+              dense: true,
+              title: Text(SegmentType.values.byName(item.category).title),
+              contentPadding: const .only(left: 16, right: 8),
+              subtitle: Text(
+                '${DurationUtils.formatDuration(item.segment.first / 1000)} 至 ${DurationUtils.formatDuration(item.segment[1] / 1000)}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          )
+          .toList(),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final outline = theme.colorScheme.outline;
     final cid = entry.source?.cid ?? entry.pageData?.cid;
-    final canDel = onDelete != null || onDeleteRequested != null;
+    final canActInPlace = entry.isCompleted || onDelete != null;
     final enableMultiSelect = controller.enableMultiSelect.value;
     void onLongPress() {
       if (enableMultiSelect) {
@@ -91,7 +108,7 @@ class DetailItem extends StatelessWidget {
       child: InkWell(
         onTap: enableTap
             ? () async {
-                if (!canDel) {
+                if (!canActInPlace) {
                   Get.to(const DownloadingPage());
                   return;
                 }
@@ -100,24 +117,16 @@ class DetailItem extends StatelessWidget {
                   return;
                 }
                 if (entry.isCompleted) {
-                  await PageUtils.toVideoPage(
-                    aid: entry.avid,
-                    cid: cid!,
-                    cover: entry.cover,
-                    title: entry.showTitle,
-                    isVertical: entry.pageData?.isVertical ?? false,
-                    extraArguments: {
-                      'sourceType': SourceType.file,
-                      'entry': entry,
-                      'dirPath': entry.entryDirPath,
-                      ...?playContext?.toArguments(),
-                    },
+                  await openDownloadEntry(
+                    entry: entry,
+                    playContext: playContext,
                   );
                   if (context.mounted) {
-                    Future.delayed(const Duration(milliseconds: 400), () {
+                    Timer(const Duration(milliseconds: 400), () {
                       if (context.mounted) {
                         // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
                         progress?.notifyListeners();
+                        onPlayReturned?.call();
                       }
                     });
                   }
@@ -131,7 +140,7 @@ class DetailItem extends StatelessWidget {
                       downloadNext: false,
                     );
                   } else {
-                    downloadService.startDownload(entry);
+                    downloadService.queueDownload(entry);
                   }
                 }
               }
@@ -196,13 +205,7 @@ class DetailItem extends StatelessWidget {
                       },
                     ),
                   ),
-                  if (entry.videoQuality case final videoQuality?)
-                    PBadge(
-                      text: VideoQuality.fromCode(videoQuality).shortDesc,
-                      right: 6.0,
-                      top: 6.0,
-                      type: PBadgeType.gray,
-                    ),
+                  entry.qaBadge,
                   if (progress != null)
                     ListenableBuilder(
                       listenable: progress!,
@@ -215,27 +218,29 @@ class DetailItem extends StatelessWidget {
                             left: 0,
                             right: 0,
                             bottom: 0,
-                            child: Stack(
-                              clipBehavior: Clip.none,
+                            child: Column(
+                              crossAxisAlignment: .end,
                               children: [
+                                Padding(
+                                  padding: const .only(right: 6, bottom: 3),
+                                  child: PBadge(
+                                    isStack: false,
+                                    text: progress >= entry.totalTimeMilli - 400
+                                        ? '已看完'
+                                        : '${DurationUtils.formatDuration(
+                                                progress ~/ 1000,
+                                              )}/'
+                                              '${DurationUtils.formatDuration(
+                                                entry.totalTimeMilli ~/ 1000,
+                                              )}',
+                                    type: .gray,
+                                  ),
+                                ),
                                 VideoProgressIndicator(
                                   color: theme.colorScheme.primary,
                                   backgroundColor:
                                       theme.colorScheme.secondaryContainer,
                                   progress: progress / entry.totalTimeMilli,
-                                ),
-                                PBadge(
-                                  text: progress >= entry.totalTimeMilli - 400
-                                      ? '已看完'
-                                      : '${DurationUtils.formatDuration(
-                                              progress ~/ 1000,
-                                            )}/'
-                                            '${DurationUtils.formatDuration(
-                                              entry.totalTimeMilli ~/ 1000,
-                                            )}',
-                                  right: 6,
-                                  bottom: 7,
-                                  type: PBadgeType.gray,
                                 ),
                               ],
                             ),
@@ -321,7 +326,7 @@ class DetailItem extends StatelessWidget {
                         left: 0,
                         bottom: 0,
                         child: Text(
-                          '${CacheManager.formatSize(entry.totalBytes)}${entry.ownerName != null ? '  ${entry.ownerName}' : ''}',
+                          '${entry.totalBytes.formatSize}${entry.ownerName != null ? '  ${entry.ownerName}' : ''}',
                           style: TextStyle(
                             fontSize: 12,
                             height: 1.6,
@@ -359,7 +364,7 @@ class DetailItem extends StatelessWidget {
                                                     DownloadStatus
                                                         .downloading ||
                                                 status == DownloadStatus.pause
-                                            ? '${CacheManager.formatSize(curDownload.downloadedBytes)}/${CacheManager.formatSize(curDownload.totalBytes)}'
+                                            ? '${curDownload.downloadedBytes.formatSize}/${curDownload.totalBytes.formatSize}'
                                             : '',
                                         progress: curDownload.totalBytes == 0
                                             ? 0
@@ -389,7 +394,7 @@ class DetailItem extends StatelessWidget {
     statusMsg: entry.status.message,
     progressStr: entry.totalBytes == 0
         ? ''
-        : '${CacheManager.formatSize(entry.downloadedBytes)}/${CacheManager.formatSize(entry.totalBytes)}',
+        : '${entry.downloadedBytes.formatSize}/${entry.totalBytes.formatSize}',
     progress: entry.totalBytes == 0
         ? 0
         : entry.downloadedBytes / entry.totalBytes,
@@ -444,7 +449,7 @@ class DetailItem extends StatelessWidget {
   }
 
   Widget _buildMoreBtn(BuildContext context, ThemeData theme) {
-    final canDel = onDelete != null || onDeleteRequested != null;
+    final canDel = entry.isCompleted;
     return SizedBox(
       width: 29,
       height: 29,
@@ -461,7 +466,7 @@ class DetailItem extends StatelessWidget {
             showStaticPositionMenu<void>(
               context: menuContext,
               items: [
-                PopupMenuItem(
+                CustomPopupMenuItem<void>(
                   height: 38,
                   child: const Text('查看详情页', style: TextStyle(fontSize: 13)),
                   onTap: () {
@@ -490,7 +495,7 @@ class DetailItem extends StatelessWidget {
                   },
                 ),
                 if (PlatformUtils.isDesktop)
-                  PopupMenuItem(
+                  CustomPopupMenuItem<void>(
                     height: 38,
                     child: const Text(
                       '打开本地文件夹',
@@ -515,7 +520,7 @@ class DetailItem extends StatelessWidget {
                     },
                   ),
                 if (entry.ownerId case final mid?)
-                  PopupMenuItem(
+                  CustomPopupMenuItem<void>(
                     height: 38,
                     child: Text(
                       '访问${entry.ownerName != null ? '：${entry.ownerName}' : '用户主页'}',
@@ -524,57 +529,36 @@ class DetailItem extends StatelessWidget {
                     onTap: () => Get.toNamed('/member?mid=$mid'),
                   ),
                 if (canDel && Platform.isAndroid)
-                  PopupMenuItem(
+                  CustomPopupMenuItem<void>(
                     height: 38,
                     child: const Text('导出', style: TextStyle(fontSize: 13)),
-                    onTap: () async {
-                      if (!await ImageUtils.checkPermissionDependOnSdkInt()) {
-                        return;
-                      }
-                      final title = entry.showTitle;
-                      SmartDialog.show(
-                        tag: 'export',
-                        clickMaskDismiss: false,
-                        builder: (_) => _ExportDialog(title: title),
-                        maskColor: Colors.black.withValues(alpha: 0.35),
-                      );
-                      try {
-                        final dest = await DownloadService.exportEntry(entry, (
-                          progress,
-                        ) {
-                          _ExportDialog.progressNotifier.value = progress;
-                        });
-                        SmartDialog.showToast('已导出到 $dest');
-                      } catch (e) {
-                        SmartDialog.showToast('导出失败: $e');
-                      } finally {
-                        SmartDialog.dismiss(tag: 'export');
-                      }
-                    },
+                    onTap: () => exportDownloadEntry(entry),
                   ),
                 ...?extraMoreItemsBuilder?.call(menuContext),
                 if (canDel) const PopupMenuDivider(height: 8),
                 if (canDel)
-                  PopupMenuItem(
+                  CustomPopupMenuItem<void>(
                     height: 38,
-                    child: Text(
-                      deleteLabel,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    onTap: () {
-                      if (onDeleteRequested != null) {
-                        onDeleteRequested!(menuContext);
+                    child: const Text('删除', style: TextStyle(fontSize: 13)),
+                    onTap: () async {
+                      if (!await showDeleteConfirm(
+                        context: menuContext,
+                        entries: [entry],
+                      )) {
                         return;
                       }
-                      showConfirmDialog(
-                        context: menuContext,
-                        title: Text(deleteConfirmText ?? '确定删除该视频？'),
-                        onConfirm: onDelete,
-                      );
+                      if (onDelete case final onDelete?) {
+                        onDelete();
+                      } else {
+                        await deleteLocalEntries(
+                          downloadService: downloadService,
+                          entries: [entry],
+                        );
+                      }
                     },
                   ),
                 if (canDel)
-                  PopupMenuItem(
+                  CustomPopupMenuItem<void>(
                     height: 38,
                     child: const Text('更新弹幕', style: TextStyle(fontSize: 13)),
                     onTap: () async {
@@ -585,82 +569,36 @@ class DetailItem extends StatelessWidget {
                       SmartDialog.showToast(res ? '更新成功' : '更新失败');
                     },
                   ),
+                if (canDel && entry.isCompleted)
+                  CustomPopupMenuItem<void>(
+                    height: 38,
+                    child: const Text('更新字幕、分段信息', style: TextStyle(fontSize: 13)),
+                    onTap: () async {
+                      final res = await downloadService.updatePlayInfo(entry);
+                      SmartDialog.showToast(res ? '更新成功' : '更新失败');
+                    },
+                  ),
+                if (canDel && entry.segments != null)
+                  CustomPopupMenuItem<void>(
+                    height: 38,
+                    child: const Text('空降片段', style: TextStyle(fontSize: 13)),
+                    onTap: () => showSegmentsDetail(menuContext),
+                  ),
+                if (canDel)
+                  CustomPopupMenuItem<void>(
+                    height: 38,
+                    child: const Text(
+                      '更新空降片段',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    onTap: () async {
+                      final res = await downloadService.updateSegments(entry);
+                      SmartDialog.showToast(res ? '更新成功' : '更新失败');
+                    },
+                  ),
               ],
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-class _ExportDialog extends StatelessWidget {
-  _ExportDialog({required this.title}) {
-    progressNotifier.value = 0;
-  }
-
-  static final progressNotifier = ValueNotifier<double>(0);
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Material(
-        color: theme.colorScheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(28),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '正在导出',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: theme.colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              ValueListenableBuilder<double>(
-                valueListenable: progressNotifier,
-                builder: (_, progress, _) {
-                  return Column(
-                    children: [
-                      LinearProgressIndicator(
-                        year2023: true,
-                        value: progress,
-                        minHeight: 4,
-                        borderRadius: BorderRadius.circular(2),
-                        color: theme.colorScheme.primary,
-                        backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${(progress * 100).toStringAsFixed(0)}%',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
         ),
       ),
     );

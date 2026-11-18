@@ -8,12 +8,42 @@ import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/widgets.dart' show GlobalKey, ScrollController;
 import 'package:get/get.dart';
 
+mixin RefreshImplMixin on ScrollOrRefreshMixin {
+  @override
+  final GlobalKey<RefreshIndicatorState> refreshKey = .new();
+
+  @override
+  Future<void> showRefresh() => refreshKey.currentState?.show() ?? onRefresh();
+}
+
 mixin ScrollOrRefreshMixin {
   ScrollController get scrollController;
 
-  void animateToTop() => scrollController.animToTop();
+  GlobalKey<RefreshIndicatorState>? get refreshKey => null;
+
+  String get topOrRefreshThrottleKey =>
+      'topOrRefresh_${identityHashCode(this)}';
+
+  String get topAndRefreshThrottleKey =>
+      'topAndRefresh_${identityHashCode(this)}';
+
+  Future<void> animateToTop() => scrollController.animToTop();
 
   Future<void> onRefresh();
+
+  void toTopAndRefresh() {
+    EasyThrottle.throttle(
+      topAndRefreshThrottleKey,
+      const Duration(milliseconds: 500),
+      () async {
+        if (scrollController.hasClients &&
+            scrollController.position.pixels != 0) {
+          await animateToTop();
+        }
+        await showRefresh();
+      },
+    );
+  }
 
   Future<void> showRefresh() => onRefresh();
 
@@ -21,7 +51,7 @@ mixin ScrollOrRefreshMixin {
     if (scrollController.hasClients) {
       if (scrollController.position.pixels == 0) {
         EasyThrottle.throttle(
-          'topOrRefresh',
+          topOrRefreshThrottleKey,
           const Duration(milliseconds: 500),
           showRefresh,
         );
@@ -33,16 +63,9 @@ mixin ScrollOrRefreshMixin {
 }
 
 abstract class CommonController<R, T> extends GetxController
-    with ScrollOrRefreshMixin {
+    with ScrollOrRefreshMixin, RefreshImplMixin {
   @override
   final ScrollController scrollController = ScrollController();
-
-  final GlobalKey<RefreshIndicatorState> refreshKey =
-      GlobalKey<RefreshIndicatorState>();
-
-  @override
-  Future<void> showRefresh() =>
-      refreshKey.currentState?.show() ?? onRefresh();
 
   bool isLoading = false;
   Rx<LoadingState> get loadingState;

@@ -4,8 +4,8 @@ import 'package:PiliPlus/common/assets.dart';
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/common/widgets/dialog/report.dart';
-import 'package:PiliPlus/common/widgets/extra_hit_test_widget.dart';
 import 'package:PiliPlus/common/widgets/pendant_avatar.dart';
+import 'package:PiliPlus/common/widgets/translucent_row.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/reply.dart';
@@ -16,6 +16,7 @@ import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/save_panel/view.dart';
 import 'package:PiliPlus/pages/setting/dynamics_setting.dart';
 import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/bili_utils.dart';
 import 'package:PiliPlus/utils/color_utils.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -31,9 +32,9 @@ import 'package:PiliPlus/utils/user_whitelist.dart';
 import 'package:PiliPlus/utils/share_utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class AuthorPanel extends StatelessWidget {
   final DynamicItemModel item;
@@ -98,67 +99,67 @@ class AuthorPanel extends StatelessWidget {
         );
       }
     }
-    Widget header = GestureDetector(
-      onTap: moduleAuthor.type == 'AUTHOR_TYPE_NORMAL'
-          ? () {
-              feedBack();
-              Get.toNamed('/member?mid=${moduleAuthor.mid}');
-            }
-          : null,
-      child: ExtraHitTestWidget(
-        width: 50,
-        child: Row(
-          spacing: 10,
+    final children = [
+      PendantAvatar(
+        size: 40,
+        moduleAuthor.face,
+        pendantImage: moduleAuthor.pendant?.image,
+      ),
+      Flexible(
+        child: Column(
+          crossAxisAlignment: .start,
           children: [
-            PendantAvatar(
-              size: 40,
-              moduleAuthor.face,
-              pendantImage: moduleAuthor.pendant?.image,
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            Text.rich(
+              maxLines: 1,
+              overflow: .ellipsis,
+              TextSpan(
                 children: [
-                  Text.rich(
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: moduleAuthor.name!,
-                          style: TextStyle(
-                            color:
-                                moduleAuthor.vip != null &&
-                                    moduleAuthor.vip!.status > 0 &&
-                                    moduleAuthor.vip!.type == 2
-                                ? theme.colorScheme.vipColor
-                                : theme.colorScheme.onSurface,
-                            fontSize: theme.textTheme.titleSmall!.fontSize,
-                          ),
-                        ),
-                        if (GlobalData().remarkMids[moduleAuthor.mid]
-                            case final String remark
-                            when remark.isNotEmpty)
-                          TextSpan(
-                            text: '（$remark）',
-                            style: TextStyle(
-                              color: theme.colorScheme.primary,
-                              fontSize:
-                                  (theme.textTheme.titleSmall!.fontSize ?? 14) -
-                                  1,
-                            ),
-                          ),
-                      ],
+                  TextSpan(
+                    text: remarkedName(moduleAuthor.mid, moduleAuthor.name!),
+                    style: TextStyle(
+                      color:
+                          moduleAuthor.vip != null &&
+                              moduleAuthor.vip!.status > 0 &&
+                              moduleAuthor.vip!.type == 2
+                          ? theme.colorScheme.vipColor
+                          : theme.colorScheme.onSurface,
+                      fontSize: theme.textTheme.titleSmall!.fontSize,
                     ),
                   ),
-                  ?pubTs,
+                  if (!GlobalData().remarkReplaceName &&
+                      remarkOf(moduleAuthor.mid) != null)
+                    TextSpan(
+                      text: '（${remarkOf(moduleAuthor.mid)}）',
+                      style: TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontSize:
+                            (theme.textTheme.titleSmall!.fontSize ?? 14) - 1,
+                      ),
+                    ),
                 ],
               ),
             ),
+            ?pubTs,
           ],
         ),
       ),
-    );
+    ];
+    Widget header;
+    if (moduleAuthor.type == 'AUTHOR_TYPE_NORMAL') {
+      header = GestureDetector(
+        onTap: () => {
+          feedBack(),
+          Get.toNamed('/member?mid=${moduleAuthor.mid}'),
+        },
+        child: TranslucentRow(
+          spacing: 10,
+          extraWidth: 50,
+          children: children,
+        ),
+      );
+    } else {
+      header = Row(spacing: 10, children: children);
+    }
     Widget? moreBtn = isSave
         ? null
         : SizedBox(
@@ -277,6 +278,7 @@ class AuthorPanel extends StatelessWidget {
         );
       }
     } catch (_) {}
+    final commentType = item.basic!.commentType;
 
     showModalBottomSheet(
       context: context,
@@ -343,31 +345,32 @@ class AuthorPanel extends StatelessWidget {
                 onTap: () {
                   Get.back();
                   ShareUtils.shareText(
-                    '${HttpString.dynamicShareBaseUrl}/${item.idStr}',
+                    '${HttpString.opusBaseUrl}/${item.idStr}',
                   );
                 },
                 minLeadingWidth: 0,
               ),
-              if ((item.basic!.commentType == 17 ||
-                      item.basic!.commentType == 11) &&
+              if (BiliUtils.isDynOrArticle(commentType) &&
                   item.modules.moduleDynamic?.major?.blocked == null)
                 ListTile(
-                  title: Text(
-                    '分享至消息',
-                    style: theme.textTheme.titleSmall,
-                  ),
+                  title: Text('分享至消息', style: theme.textTheme.titleSmall),
                   leading: const Icon(Icons.forward_to_inbox, size: 19),
                   onTap: () {
                     Get.back();
                     try {
-                      bool isDyn = item.basic!.commentType == 17;
-                      String id = isDyn ? item.idStr : item.basic!.ridStr!;
-                      int source = isDyn ? 11 : 2;
+                      final isDyn = commentType == 17;
+                      final id = isDyn ? item.idStr : item.basic!.ridStr!;
+                      final source = switch (commentType) {
+                        11 => 2,
+                        12 => 6,
+                        17 => 11,
+                        _ => throw UnsupportedError(commentType.toString()),
+                      };
                       final moduleDynamic = item.modules.moduleDynamic!;
                       final title =
                           moduleDynamic.desc?.text ??
                           moduleDynamic.major!.opus!.summary!.text!;
-                      String? thumb = isDyn
+                      final thumb = isDyn
                           ? moduleAuthor.face
                           : moduleDynamic.major?.opus?.pics?.firstOrNull?.url;
                       PageUtils.pmShare(
@@ -499,7 +502,7 @@ class AuthorPanel extends StatelessWidget {
                       Get.back();
                       final res = await ReplyHttp.replyInteraction(
                         oid: item.basic!.commentIdStr!,
-                        type: item.basic!.commentType!,
+                        type: commentType!,
                       );
                       if (res case Success(:final response)) {
                         if (context.mounted) {
@@ -512,41 +515,37 @@ class AuthorPanel extends StatelessWidget {
                               final reply = response.upReply;
                               final enableReply = reply.status == 1;
 
-                              return AlertDialog(
+                              return SimpleDialog(
                                 clipBehavior: .hardEdge,
                                 contentPadding: const .symmetric(vertical: 12),
-                                content: Column(
-                                  mainAxisSize: .min,
-                                  crossAxisAlignment: .start,
-                                  children: [
-                                    ListTile(
-                                      dense: true,
-                                      enabled: selection.canModify,
-                                      title: Text(
-                                        '${enableSelection ? '停止' : '开启'}评论精选',
-                                        style: const TextStyle(fontSize: 14),
-                                      ),
-                                      onTap: () {
-                                        Get.back();
-                                        onSetReplySubject!(
-                                          enableSelection ? 2 : 1,
-                                        );
-                                      },
+                                children: [
+                                  ListTile(
+                                    dense: true,
+                                    enabled: selection.canModify,
+                                    title: Text(
+                                      '${enableSelection ? '停止' : '开启'}评论精选',
+                                      style: const TextStyle(fontSize: 14),
                                     ),
-                                    ListTile(
-                                      dense: true,
-                                      enabled: reply.canModify,
-                                      title: Text(
-                                        '${enableReply ? '关闭' : '恢复'}评论',
-                                        style: const TextStyle(fontSize: 14),
-                                      ),
-                                      onTap: () {
-                                        Get.back();
-                                        onSetReplySubject!(enableReply ? 3 : 4);
-                                      },
+                                    onTap: () {
+                                      Get.back();
+                                      onSetReplySubject!(
+                                        enableSelection ? 2 : 1,
+                                      );
+                                    },
+                                  ),
+                                  ListTile(
+                                    dense: true,
+                                    enabled: reply.canModify,
+                                    title: Text(
+                                      '${enableReply ? '关闭' : '恢复'}评论',
+                                      style: const TextStyle(fontSize: 14),
                                     ),
-                                  ],
-                                ),
+                                    onTap: () {
+                                      Get.back();
+                                      onSetReplySubject!(enableReply ? 3 : 4);
+                                    },
+                                  ),
+                                ],
                               );
                             },
                           );
@@ -585,32 +584,29 @@ class AuthorPanel extends StatelessWidget {
 
                       showDialog(
                         context: context,
-                        builder: (context) => AlertDialog(
+                        builder: (context) => SimpleDialog(
                           clipBehavior: Clip.hardEdge,
                           contentPadding: const .symmetric(vertical: 12),
-                          content: Column(
-                            mainAxisSize: .min,
-                            children: [
-                              ListTile(
-                                dense: true,
-                                enabled: isPrivate,
-                                title: const Text(
-                                  '所有用户可见',
-                                  style: TextStyle(fontSize: 14),
-                                ),
-                                onTap: onTap,
+                          children: [
+                            ListTile(
+                              dense: true,
+                              enabled: isPrivate,
+                              title: const Text(
+                                '所有用户可见',
+                                style: TextStyle(fontSize: 14),
                               ),
-                              ListTile(
-                                dense: true,
-                                enabled: !isPrivate,
-                                title: const Text(
-                                  '仅自己可见',
-                                  style: TextStyle(fontSize: 14),
-                                ),
-                                onTap: onTap,
+                              onTap: onTap,
+                            ),
+                            ListTile(
+                              dense: true,
+                              enabled: !isPrivate,
+                              title: const Text(
+                                '仅自己可见',
+                                style: TextStyle(fontSize: 14),
                               ),
-                            ],
-                          ),
+                              onTap: onTap,
+                            ),
+                          ],
                         ),
                       );
                     },
@@ -671,7 +667,28 @@ class AuthorPanel extends StatelessWidget {
                     ),
                   ),
               ],
-              if (Accounts.main.isLogin)
+              if (!Accounts.main.isLogin)
+                ListTile(
+                  title: Text(
+                    '屏蔽',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                  leading: Icon(
+                    Icons.error_outline_outlined,
+                    size: 19,
+                    color: theme.colorScheme.error,
+                  ),
+                  onTap: () {
+                    Get.back();
+                    Pref.setBlackMid(moduleAuthor.mid!);
+                    SmartDialog.showToast('屏蔽成功');
+                  },
+                  minLeadingWidth: 0,
+                )
+              else
                 ListTile(
                   title: Text(
                     '举报',
@@ -688,6 +705,7 @@ class AuthorPanel extends StatelessWidget {
                     Get.back();
                     autoWrapReportDialog(
                       context,
+                      mid: () => moduleAuthor.mid!,
                       ReportOptions.dynamicReport,
                       (reasonType, reasonDesc, banUid) {
                         if (banUid) {
@@ -701,7 +719,7 @@ class AuthorPanel extends StatelessWidget {
                           mid: moduleAuthor.mid!,
                           dynId: item.idStr,
                           reasonType: reasonType,
-                          reasonDesc: reasonType == 0 ? reasonDesc : null,
+                          reasonDesc: reasonDesc,
                         );
                       },
                     );

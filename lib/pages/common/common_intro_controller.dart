@@ -7,6 +7,7 @@ import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/video/source_type.dart';
 import 'package:PiliPlus/models_new/fav/fav_folder/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/data.dart';
+import 'package:PiliPlus/models_new/video/video_detail/episode.dart';
 import 'package:PiliPlus/models_new/video/video_detail/stat_detail.dart';
 import 'package:PiliPlus/models_new/video/video_tag/data.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
@@ -20,17 +21,21 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 abstract class CommonIntroController extends GetxController
     with GetSingleTickerProviderStateMixin, TripleMixin, FavMixin {
   late final String heroTag;
-  late String bvid;
+
+  int get aid => videoDetailCtr.aid;
+  String get bvid => videoDetailCtr.bvid;
+  RxInt get cid => videoDetailCtr.cid;
+  late final videoDetailCtr = Get.find<VideoDetailController>(tag: heroTag);
 
   // 是否稍后再看
-  final RxBool hasLater = false.obs;
+  late final RxBool hasLater;
 
   final Rx<List<VideoTagItem>?> videoTags = Rx<List<VideoTagItem>?>(null);
 
@@ -57,28 +62,28 @@ abstract class CommonIntroController extends GetxController
 
   void queryVideoIntro();
 
-  bool prevPlay();
-  bool nextPlay();
+  bool prevPlay({bool manual = false});
+  bool nextPlay({bool manual = false});
 
   void actionShareVideo(BuildContext context);
 
+  void onChangeEpisode(BaseEpisodeItem episode);
+
   // 同时观看
   final bool isShowOnlineTotal = Pref.enableOnlineTotal;
+  // 当前分P弹幕数
+  final bool isShowDmCount = Pref.enableDmCount;
   late final RxString total = '1'.obs;
   Timer? timer;
-
-  late final RxInt cid;
-
-  late final videoDetailCtr = Get.find<VideoDetailController>(tag: heroTag);
 
   @override
   void onInit() {
     super.onInit();
     final args = Get.arguments;
     heroTag = args['heroTag'];
-    bvid = args['bvid'];
-    cid = RxInt(args['cid']);
-    hasLater.value = args['sourceType'] == SourceType.watchLater;
+    hasLater = RxBool(
+      args['viewLater'] ?? args['sourceType'] == SourceType.watchLater,
+    );
 
     queryVideoIntro();
     startTimer();
@@ -104,7 +109,7 @@ abstract class CommonIntroController extends GetxController
       return;
     }
     final result = await VideoHttp.onlineTotal(
-      aid: IdUtils.bv2av(bvid),
+      aid: aid,
       bvid: bvid,
       cid: cid.value,
     );
@@ -126,9 +131,10 @@ abstract class CommonIntroController extends GetxController
       return;
     }
     final res = await VideoHttp.coinVideo(
-      bvid: bvid,
+      aid: IdUtils.bv2av(bvid),
       multiply: coin,
       selectLike: coinWithLike ? 1 : 0,
+      referer: 'https://www.bilibili.com/video/$bvid',
     );
     if (res.isSuccess) {
       SmartDialog.showToast('投币成功');
@@ -151,9 +157,9 @@ abstract class CommonIntroController extends GetxController
 
   Future<void> viewLater() async {
     final res = await (hasLater.value
-        ? UserHttp.toViewDel(aids: IdUtils.bv2av(bvid).toString())
+        ? UserHttp.toViewDel(aids: aid)
         : UserHttp.toViewLater(bvid: bvid));
-    if (res.isSuccess) hasLater.value = !hasLater.value;
+    if (res.isSuccess) hasLater.toggle();
   }
 }
 
@@ -239,10 +245,10 @@ mixin FavMixin on TripleMixin {
           SmartDialog.dismiss();
           if (result.isSuccess) {
             updateFavCount(hasFav ? -1 : 1);
-            this.hasFav.value = !hasFav;
+            this.hasFav.toggle();
             SmartDialog.showToast(hasFav ? '已从默认收藏夹中移除' : '已加入默认收藏夹');
           } else {
-            res.toast();
+            result.toast();
           }
         } else {
           SmartDialog.dismiss();

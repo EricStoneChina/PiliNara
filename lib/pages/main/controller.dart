@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:PiliPlus/common/widgets/view_safe_area.dart';
 import 'package:PiliPlus/grpc/dyn.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/msg.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamic_badge_mode.dart';
+import 'package:PiliPlus/models/common/home_tab_type.dart';
 import 'package:PiliPlus/models/common/msg/msg_unread_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/home/controller.dart';
+import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/mine/view.dart';
 import 'package:PiliPlus/services/account_service.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
@@ -20,8 +23,8 @@ import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/update.dart';
 import 'package:collection/collection.dart';
 import 'package:easy_debounce/easy_throttle.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class MainController extends GetxController
     with GetSingleTickerProviderStateMixin, AccountMixin {
@@ -49,22 +52,20 @@ class MainController extends GetxController
   late bool hasHome = false;
   late final homeController = Get.putOrFind(HomeController.new);
 
+  late final disableLikeMsg = Pref.disableLikeMsg;
   late DynamicBadgeMode msgBadgeMode = Pref.msgBadgeMode;
   late Set<MsgUnReadType> msgUnReadTypes = Pref.msgUnReadTypeV2;
-  late final RxString msgUnReadCount = ''.obs;
+  late final RxnString msgUnReadCount = RxnString(null);
   late int lastCheckUnreadAt = 0;
 
   final enableMYBar = Pref.enableMYBar;
   final floatingNavBar = Pref.floatingNavBar;
   final useSideBar = Pref.useSideBar;
+  final hideSideBarLabel = Pref.hideSideBarLabel;
   final mainTabBarView = Pref.mainTabBarView;
   late final optTabletNav = Pref.optTabletNav;
 
   late bool directExitOnBack = Pref.directExitOnBack;
-  late bool showTrayIcon = Pref.showTrayIcon;
-  late bool minimizeOnExit = Pref.minimizeOnExit;
-  late bool pauseOnMinimize = Pref.pauseOnMinimize;
-  late bool isPlaying = false;
 
   static const _period = 5 * 60 * 1000;
   late int _lastSelectTime = 0;
@@ -101,7 +102,7 @@ class MainController extends GetxController
 
     hasDyn = navigationBars.contains(NavigationBarType.dynamics);
     if (dynamicBadgeMode != DynamicBadgeMode.hidden) {
-      if (hasDyn) {
+      if (hasDyn && navigationBars[selectedIndex.value] != .dynamics) {
         if (checkDynamic) {
           _lastCheckDynamicAt = DateTime.now().millisecondsSinceEpoch;
         }
@@ -151,7 +152,7 @@ class MainController extends GetxController
               count += response.at;
               break;
             case MsgUnReadType.like:
-              count += response.like;
+              if (!disableLikeMsg) count += response.like;
               break;
             case MsgUnReadType.sysMsg:
               count += response.sysMsg;
@@ -163,12 +164,16 @@ class MainController extends GetxController
     return count;
   }
 
+  void clearUnreadMsg() {
+    msgUnReadCount.value = null;
+  }
+
   Future<void> queryUnreadMsg([bool isChangeType = false]) async {
     if (!accountService.isLogin.value ||
         !hasHome ||
         msgUnReadTypes.isEmpty ||
         msgBadgeMode == DynamicBadgeMode.hidden) {
-      msgUnReadCount.value = '';
+      clearUnreadMsg();
       return;
     }
 
@@ -177,7 +182,7 @@ class MainController extends GetxController
     final count = res.sum;
 
     final countStr = count == 0
-        ? ''
+        ? null
         : count > 99
         ? '99+'
         : count.toString();
@@ -228,12 +233,12 @@ class MainController extends GetxController
       navigationBars = NavigationBarType.values;
     } else {
       navigationBars = navBarSort
-          .map((i) => NavigationBarType.values[i])
+          .map(NavigationBarType.values.elementAt)
           .toList();
     }
     this.navigationBars = navigationBars;
     final defPage = Pref.defaultHomePage;
-    selectedIndex.value = navigationBars.indexOf(defPage);
+    selectedIndex.value = math.max(0, navigationBars.indexOf(defPage));
   }
 
   void checkDefaultSearch([bool shouldCheck = false]) {
@@ -302,27 +307,61 @@ class MainController extends GetxController
         setDynCount();
       }
     } else {
-      int now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastSelectTime < 500) {
-        EasyThrottle.throttle(
-          'topOrRefresh',
-          const Duration(milliseconds: 500),
-          () {
-            if (currentNav == NavigationBarType.home) {
-              homeController.onRefresh();
-            } else if (currentNav == NavigationBarType.dynamics) {
-              dynamicController.onRefresh();
-            }
-          },
-        );
+      if (Pref.enableCurrentPageRefresh) {
+        _refreshCurrentNav(currentNav);
       } else {
-        if (currentNav == NavigationBarType.home) {
-          homeController.toTopOrRefresh();
-        } else if (currentNav == NavigationBarType.dynamics) {
-          dynamicController.toTopOrRefresh();
-        }
+        _toTopOrRefreshCurrentNav(currentNav);
       }
-      _lastSelectTime = now;
+    }
+  }
+
+  void _toTopOrRefreshCurrentNav(NavigationBarType currentNav) {
+    int now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastSelectTime < 500) {
+      EasyThrottle.throttle(
+        'topOrRefresh',
+        const Duration(milliseconds: 500),
+        () {
+          switch (currentNav) {
+            case NavigationBarType.home:
+              homeController.showRefresh();
+              break;
+            case NavigationBarType.dynamics:
+              dynamicController.showRefresh();
+              break;
+            case NavigationBarType.mine:
+              Get.putOrFind(MineController.new).onRefresh();
+              break;
+          }
+        },
+      );
+    } else {
+      switch (currentNav) {
+        case NavigationBarType.home:
+          homeController.toTopOrRefresh();
+          break;
+        case NavigationBarType.dynamics:
+          dynamicController.toTopOrRefresh();
+          break;
+        case NavigationBarType.mine:
+          Get.putOrFind(MineController.new).toTopOrRefresh();
+          break;
+      }
+    }
+    _lastSelectTime = now;
+  }
+
+  void _refreshCurrentNav(NavigationBarType currentNav) {
+    switch (currentNav) {
+      case NavigationBarType.home:
+        homeController.toTopAndRefresh();
+        break;
+      case NavigationBarType.dynamics:
+        dynamicController.toTopAndRefresh();
+        break;
+      case NavigationBarType.mine:
+        Get.putOrFind(MineController.new).toTopAndRefresh();
+        break;
     }
   }
 
@@ -330,6 +369,16 @@ class MainController extends GetxController
     if (hasHome) {
       homeController.showTopBar?.value = true;
     }
+  }
+
+  bool refreshRecommendations() {
+    if (navigationBars[selectedIndex.value] == NavigationBarType.home &&
+        homeController.tabs[homeController.tabController.index] ==
+            HomeTabType.rcmd) {
+      homeController.showRefresh();
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -342,6 +391,7 @@ class MainController extends GetxController
   @override
   void onChangeAccount(bool isLogin) {
     if (isLogin) {
+      queryUnreadMsg();
       getUnreadDynamic();
     } else {
       setDynCount();

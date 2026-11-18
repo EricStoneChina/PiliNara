@@ -2,7 +2,6 @@ import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/common/widgets/flutter/popup_menu.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/http/video.dart';
-import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/home/rcmd/result.dart';
 import 'package:PiliPlus/models/model_hot_video_item.dart';
 import 'package:PiliPlus/models/model_video.dart';
@@ -18,10 +17,10 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/user_whitelist.dart';
 import 'package:PiliPlus/utils/utils.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 class _VideoCustomAction {
   final String title;
@@ -86,7 +85,7 @@ class VideoPopupMenu extends StatelessWidget {
   void _appendKeyword({
     required String key,
     required String value,
-    required void Function(RegExp) applyRegex,
+    required void Function(List<RegExp>) applyRegex,
     required String successMsg,
   }) {
     final keyword = value.trim();
@@ -96,18 +95,12 @@ class VideoPopupMenu extends StatelessWidget {
     }
     final escapedKeyword = RegExp.escape(keyword);
     final stored = GStorage.setting.get(key, defaultValue: '') as String;
-    final items = stored
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final items = Pref.parseBanWordItems(stored);
     if (!items.contains(escapedKeyword)) {
       items.add(escapedKeyword);
       final joined = items.join('\n');
       GStorage.setting.put(key, joined);
-      applyRegex(
-        RegExp(Pref.parseBanWordToRegex(joined), caseSensitive: false),
-      );
+      applyRegex(Pref.compileBanWord(joined));
       SmartDialog.showToast(successMsg);
       onRemove?.call();
       return;
@@ -219,7 +212,7 @@ class VideoPopupMenu extends StatelessWidget {
                     value: title,
                     applyRegex: (value) {
                       RecommendFilter.rcmdRegExp = value;
-                      RecommendFilter.enableFilter = value.pattern.isNotEmpty;
+                      RecommendFilter.enableFilter = value.isNotEmpty;
                     },
                     successMsg: '已加入标题关键词屏蔽',
                   );
@@ -238,7 +231,7 @@ class VideoPopupMenu extends StatelessWidget {
                   value: zoneName!,
                   applyRegex: (value) {
                     VideoHttp.zoneRegExp = value;
-                    VideoHttp.enableFilter = value.pattern.isNotEmpty;
+                    VideoHttp.enableFilter = value.isNotEmpty;
                   },
                   successMsg: '已加入频道关键词屏蔽',
                 );
@@ -264,11 +257,12 @@ class VideoPopupMenu extends StatelessWidget {
           const Icon(CustomIcons.identifier_circle, size: 16),
           () => Utils.copyText(videoItem.bvid!),
         ),
-        _VideoCustomAction(
-          '稍后再看',
-          const Icon(MdiIcons.clockTimeEightOutline, size: 16),
-          () => UserHttp.toViewLater(bvid: videoItem.bvid),
-        ),
+        if (Accounts.main.isLogin)
+          _VideoCustomAction(
+            '稍后再看',
+            const Icon(MdiIcons.clockTimeEightOutline, size: 16),
+            () => UserHttp.toViewLater(bvid: videoItem.bvid),
+          ),
         if (videoItem.cid != null && Pref.enableAi)
           _VideoCustomAction(
             'AI总结',
@@ -313,11 +307,11 @@ class VideoPopupMenu extends StatelessWidget {
           '不感兴趣',
           const Icon(MdiIcons.thumbDownOutline, size: 16),
           () {
-            String? accessKey = Accounts.get(
-              AccountType.recommend,
-            ).accessKey;
-            if (accessKey == null || accessKey == "") {
-              SmartDialog.showToast("请退出账号后重新登录");
+            final rcmd = Accounts.get(.recommend);
+            if (rcmd.accessKey == null || rcmd.accessKey == "") {
+              SmartDialog.showToast(
+                rcmd.isLogin ? '请退出账号后重新登录' : '账号未登录',
+              );
               return;
             }
             if (videoItem case final RcmdVideoItemAppModel item) {
@@ -401,65 +395,58 @@ class VideoPopupMenu extends StatelessWidget {
             } else {
               showDialog(
                 context: context,
-                builder: (context) => AlertDialog(
-                  content: SingleChildScrollView(
-                    child: Column(
+                builder: (context) => SimpleDialog(
+                  contentPadding: const EdgeInsets.all(24),
+                  children: [
+                    const Center(child: Text("web端暂不支持精细选择")),
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 5.0,
+                      runSpacing: 2.0,
+                      alignment: WrapAlignment.center,
                       children: [
-                        const SizedBox(height: 5),
-                        const Text("web端暂不支持精细选择"),
-                        const SizedBox(height: 5),
-                        Wrap(
-                          spacing: 5.0,
-                          runSpacing: 2.0,
-                          children: [
-                            FilledButton.tonal(
-                              onPressed: () async {
-                                Get.back();
-                                SmartDialog.showLoading(
-                                  msg: '正在提交',
-                                );
-                                final res = await VideoHttp.dislikeVideo(
-                                  bvid: videoItem.bvid!,
-                                  type: true,
-                                );
-                                SmartDialog.dismiss();
-                                if (res.isSuccess) {
-                                  SmartDialog.showToast('点踩成功');
-                                  onRemove?.call();
-                                } else {
-                                  res.toast();
-                                }
-                              },
-                              style: FilledButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                              ),
-                              child: const Text("点踩"),
-                            ),
-                            FilledButton.tonal(
-                              onPressed: () async {
-                                Get.back();
-                                SmartDialog.showLoading(
-                                  msg: '正在提交',
-                                );
-                                final res = await VideoHttp.dislikeVideo(
-                                  bvid: videoItem.bvid!,
-                                  type: false,
-                                );
-                                SmartDialog.dismiss();
-                                SmartDialog.showToast(
-                                  res.isSuccess ? '取消踩' : res.toString(),
-                                );
-                              },
-                              style: FilledButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                              ),
-                              child: const Text("撤销"),
-                            ),
-                          ],
+                        FilledButton.tonal(
+                          onPressed: () async {
+                            Get.back();
+                            SmartDialog.showLoading(msg: '正在提交');
+                            final res = await VideoHttp.dislikeVideo(
+                              bvid: videoItem.bvid!,
+                              type: true,
+                            );
+                            SmartDialog.dismiss();
+                            if (res.isSuccess) {
+                              SmartDialog.showToast('点踩成功');
+                              onRemove?.call();
+                            } else {
+                              res.toast();
+                            }
+                          },
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text("点踩"),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: () async {
+                            Get.back();
+                            SmartDialog.showLoading(msg: '正在提交');
+                            final res = await VideoHttp.dislikeVideo(
+                              bvid: videoItem.bvid!,
+                              type: false,
+                            );
+                            SmartDialog.dismiss();
+                            SmartDialog.showToast(
+                              res.isSuccess ? '取消踩' : res.toString(),
+                            );
+                          },
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text("撤销"),
                         ),
                       ],
                     ),
-                  ),
+                  ],
                 ),
               );
             }
@@ -484,11 +471,19 @@ class VideoPopupMenu extends StatelessWidget {
                 ),
                 actions: [
                   TextButton(
+                    onPressed: () {
+                      Get.back();
+                      Pref.setBlackMid(videoItem.owner.mid!);
+                      onRemove?.call();
+                    },
+                    child: const Text('本地屏蔽'),
+                  ),
+                  TextButton(
                     onPressed: Get.back,
                     child: Text(
-                      '点错了',
+                      '取消',
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.outline,
+                        color: ColorScheme.of(context).outline,
                       ),
                     ),
                   ),
@@ -530,13 +525,13 @@ class VideoPopupMenu extends StatelessWidget {
       context: context,
       items: [
         for (int i = 0; i < actions.length; i++)
-          PopupMenuItem<int>(
+          CustomPopupMenuItem<int>(
             value: i,
             height: menuItemHeight,
             child: Row(
               children: [
                 actions[i].icon,
-                const SizedBox(width: 6),
+                const SizedBox(width: 8),
                 Text(actions[i].title, style: const TextStyle(fontSize: 13)),
               ],
             ),

@@ -7,7 +7,6 @@ import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/browser_ua.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
-import 'package:PiliPlus/http/login.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/live/live_contribution_rank_type.dart';
 import 'package:PiliPlus/models/common/live/live_search_type.dart';
@@ -21,6 +20,7 @@ import 'package:PiliPlus/models_new/live/live_dm_block/shield_user_list.dart';
 import 'package:PiliPlus/models_new/live/live_dm_info/data.dart';
 import 'package:PiliPlus/models_new/live/live_emote/data.dart';
 import 'package:PiliPlus/models_new/live/live_emote/datum.dart';
+import 'package:PiliPlus/models_new/live/live_fans_medal/data.dart';
 import 'package:PiliPlus/models_new/live/live_feed_index/data.dart';
 import 'package:PiliPlus/models_new/live/live_follow/data.dart';
 import 'package:PiliPlus/models_new/live/live_medal_wall/data.dart';
@@ -51,9 +51,7 @@ abstract final class LiveHttp {
     String csrf = Accounts.main.csrf;
     final res = await Request().post(
       Api.sendLiveMsg,
-      queryParameters: await WbiSign.makSign({
-        'web_location': 444.8,
-      }),
+      queryParameters: await WbiSign.makSign({'web_location': 444.8}),
       data: FormData.fromMap({
         'bubble': 0,
         'msg': msg,
@@ -88,7 +86,7 @@ abstract final class LiveHttp {
 
   static Future<LoadingState<RoomPlayInfoData>> liveRoomInfo({
     required Object roomId,
-    Object? qn,
+    int? qn,
     bool onlyAudio = false,
   }) async {
     final res = await Request().get(
@@ -108,7 +106,11 @@ abstract final class LiveHttp {
       }),
     );
     if (res.data['code'] == 0) {
-      return Success(RoomPlayInfoData.fromJson(res.data['data']));
+      try {
+        return Success(RoomPlayInfoData.fromJson(res.data['data']));
+      } catch (e) {
+        return Error(e.toString());
+      }
     } else {
       return Error(res.data['message']);
     }
@@ -119,9 +121,7 @@ abstract final class LiveHttp {
   }) async {
     final res = await Request().get(
       Api.liveRoomInfoH5,
-      queryParameters: {
-        'room_id': roomId,
-      },
+      queryParameters: {'room_id': roomId},
     );
     if (res.data['code'] == 0) {
       return Success(RoomInfoH5Data.fromJson(res.data['data']));
@@ -169,7 +169,11 @@ abstract final class LiveHttp {
       }),
     );
     if (res.data['code'] == 0) {
-      return Success(LiveDmInfoData.fromJson(res.data['data']));
+      try {
+        return Success(LiveDmInfoData.fromJson(res.data['data']));
+      } catch (e) {
+        return Error(e.toString());
+      }
     } else {
       return Error(res.data['message']);
     }
@@ -225,11 +229,9 @@ abstract final class LiveHttp {
       queryParameters: params,
       options: Options(
         headers: {
-          'buvid': LoginHttp.buvid,
-          'fp_local':
-              '1111111111111111111111111111111111111111111111111111111111111111',
-          'fp_remote':
-              '1111111111111111111111111111111111111111111111111111111111111111',
+          'buvid': recommend.buvid,
+          'fp_local': '1111111111111111111111111111111111111111111111111111111111111111',
+          'fp_remote': '1111111111111111111111111111111111111111111111111111111111111111',
           'session_id': '11111111',
           'env': 'prod',
           'app-key': 'android',
@@ -305,11 +307,9 @@ abstract final class LiveHttp {
       queryParameters: params,
       options: Options(
         headers: {
-          'buvid': LoginHttp.buvid,
-          'fp_local':
-              '1111111111111111111111111111111111111111111111111111111111111111',
-          'fp_remote':
-              '1111111111111111111111111111111111111111111111111111111111111111',
+          'buvid': recommend.buvid,
+          'fp_local': '1111111111111111111111111111111111111111111111111111111111111111',
+          'fp_remote': '1111111111111111111111111111111111111111111111111111111111111111',
           'session_id': '11111111',
           'env': 'prod',
           'app-key': 'android',
@@ -626,7 +626,7 @@ abstract final class LiveHttp {
 
   @pragma('vm:notify-debugger-on-exception')
   static Future<LoadingState<SuperChatData>> superChatMsg(
-    Object roomId,
+    int roomId,
   ) async {
     final res = await Request().get(
       Api.superChatMsg,
@@ -636,7 +636,7 @@ abstract final class LiveHttp {
     );
     if (res.data['code'] == 0) {
       try {
-        return Success(SuperChatData.fromJson(res.data['data']));
+        return Success(SuperChatData.fromJson(res.data['data'], roomId));
       } catch (e, s) {
         return Error('$e\n\n$s');
       }
@@ -894,4 +894,136 @@ abstract final class LiveHttp {
       return Error(e.toString());
     }
   }
+
+  static Future<LoadingState<void>> liveFeedback(
+    Object roomId,
+    Object id,
+    String type, {
+    int page = 1,
+  }) async {
+    final params = {
+      'access_key': ?recommend.accessKey,
+      'actionKey': 'appkey',
+      'build': 8430300,
+      'channel': 'master',
+      'c_locale': 'zh_CN',
+      'device': 'android',
+      'disable_rcmd': 0,
+      'mobi_app': 'android',
+      'platform': 'android',
+      's_locale': 'zh_CN',
+      'statistics': Constants.statisticsApp,
+      'version': '8.43.0',
+      'id': id,
+      'id_type': type,
+      'room_id': roomId,
+      'type': 'dislike',
+      'page': page,
+    };
+    AppSign.appSign(params);
+    final res = await Request().get(
+      Api.liveFeedback,
+      queryParameters: params,
+    );
+    if (res.data['code'] == 0) {
+      return const Success(null);
+    } else {
+      return Error(res.data['message']);
+    }
+  }
+
+  static Future<LoadingState<FansMedalPanelData>> fansMedalPanel({
+    required Object roomId,
+    required Object targetId,
+    int page = 1,
+  }) async {
+    final params = <String, dynamic>{
+      'access_key': ?Accounts.main.accessKey,
+      'actionKey': 'appkey',
+      'platform': 'android',
+      'statistics': Constants.statisticsApp,
+      'room_id': roomId,
+      'target_id': targetId,
+      'page': page,
+      'page_size': 50,
+    };
+    AppSign.appSign(params);
+    final res = await Request().get(
+      Api.liveFansMedalPanel,
+      queryParameters: params,
+    );
+    if (res.data['code'] == 0) {
+      try {
+        return Success(FansMedalPanelData.fromJson(res.data['data']));
+      } catch (e) {
+        return Error(e.toString());
+      }
+    } else {
+      return Error(res.data['message']);
+    }
+  }
+
+  static Future<LoadingState<String?>> liveMedalName(Object uid) async {
+    final res = await Request().get(
+      Api.liveMasterInfo,
+      queryParameters: {'uid': uid},
+    );
+    if (res.data['code'] == 0) {
+      try {
+        return Success(res.data['data']['medal_name'] as String);
+      } catch (e) {
+        return Error(e.toString());
+      }
+    } else {
+      return Error(res.data['message']);
+    }
+  }
+
+  static Future<LoadingState<void>> _fansMedalAction(
+    String url, {
+    required Object medalId,
+    required Object targetId,
+  }) async {
+    final params = <String, dynamic>{
+      'access_key': ?Accounts.main.accessKey,
+      'actionKey': 'appkey',
+      'platform': 'android',
+      'statistics': Constants.statisticsApp,
+      'medal_id': medalId,
+      'medal_type': 1,
+      'source': 1,
+      'target_id': targetId,
+    };
+    AppSign.appSign(params);
+    final res = await Request().post(
+      url,
+      data: params,
+      options: Options(contentType: Headers.formUrlEncodedContentType),
+    );
+    if (res.data['code'] == 0) {
+      return const Success(null);
+    } else {
+      return Error(res.data['message']);
+    }
+  }
+
+  static Future<LoadingState<void>> fansMedalWear({
+    required Object medalId,
+    required Object targetId,
+  }) =>
+      _fansMedalAction(
+        Api.liveFansMedalWear,
+        medalId: medalId,
+        targetId: targetId,
+      );
+
+  static Future<LoadingState<void>> fansMedalTakeOff({
+    required Object medalId,
+    required Object targetId,
+  }) =>
+      _fansMedalAction(
+        Api.liveFansMedalTakeOff,
+        medalId: medalId,
+        targetId: targetId,
+      );
 }

@@ -10,12 +10,20 @@ import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/image_viewer/hero.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/audio_video_progress_bar.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/segment_progress_bar.dart';
+import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
+import 'package:PiliPlus/common/widgets/scroll_physics.dart'
+    show platformClampingPhysics;
+import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:PiliPlus/grpc/bilibili/app/listener/v1.pb.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
 import 'package:PiliPlus/models/common/image_type.dart';
 import 'package:PiliPlus/pages/audio/controller.dart';
 import 'package:PiliPlus/pages/audio/volume_button.dart';
+import 'package:PiliPlus/pages/setting/models/play_settings.dart'
+    show showPlayerVolumeDialog;
 import 'package:PiliPlus/pages/video/introduction/ugc/widgets/action_item.dart';
+import 'package:PiliPlus/pages/video/widgets/header_control.dart'
+    show HeaderControlState;
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart';
 import 'package:PiliPlus/services/pip_overlay_service.dart';
@@ -27,6 +35,7 @@ import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
+import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
@@ -34,10 +43,10 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart' hide DraggableScrollableSheet;
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart' hide DraggableScrollableSheet;
 
 class AudioPage extends StatefulWidget {
   const AudioPage({super.key});
@@ -89,9 +98,17 @@ class _AudioPageState extends State<AudioPage> {
     super.initState();
     // 进入听视频界面时，确保关闭所有应用内小窗
     if (PipOverlayService.isInPipMode) {
-      PipOverlayService.stopPip(callOnClose: false, immediate: true);
+      PipOverlayService.stopPip(
+        callOnClose: false,
+        immediate: true,
+        releaseSavedOwner: true,
+        // 小窗 owner 的视频页仍在栈内时只暂停不 dispose，避免破坏其计数
+        disposeSavedOwnerPlayer: VideoStackManager.getCount() == 0,
+      );
     }
     if (LivePipOverlayService.isInPipMode) {
+      // 旧直播 controller 就此退休，关闭其弹幕流/计时器/通知条目防泄漏
+      LivePipOverlayService.cleanupSavedController();
       LivePipOverlayService.stopLivePip(callOnClose: false);
     }
   }
@@ -107,8 +124,7 @@ class _AudioPageState extends State<AudioPage> {
     final colorScheme = ColorScheme.of(context);
     final isPortrait = MediaQuery.sizeOf(context).isPortrait;
     final padding = MediaQuery.viewPaddingOf(context);
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
+    return SimpleScaffold(
       appBar: AppBar(
         actions: [
           if (_controller.isUgc && _controller.enableSponsorBlock)
@@ -220,8 +236,7 @@ class _AudioPageState extends State<AudioPage> {
           maxWidth: min(640, context.mediaQueryShortestSide),
         ),
         builder: (context) {
-          final theme = Theme.of(context);
-          final colorScheme = theme.colorScheme;
+          final colorScheme = ColorScheme.of(context);
           Widget child = CustomScrollView(
             controller: scrollController,
             physics: _controller.reachStart
@@ -248,7 +263,6 @@ class _AudioPageState extends State<AudioPage> {
                         initiallyExpanded: isCurr,
                         collapsedIconColor: isCurr ? colorScheme.primary : null,
                         iconColor: isCurr ? null : colorScheme.onSurfaceVariant,
-                        controlAffinity: ListTileControlAffinity.leading,
                         title: Text(
                           item.arc.title,
                           maxLines: 1,
@@ -429,11 +443,8 @@ class _AudioPageState extends State<AudioPage> {
                 ),
                 Expanded(
                   child: Material(
-                    type: MaterialType.transparency,
-                    child: Theme(
-                      data: theme.copyWith(dividerColor: Colors.transparent),
-                      child: child,
-                    ),
+                    type: .transparency,
+                    child: child,
                   ),
                 ),
                 Divider(
@@ -633,28 +644,43 @@ class _AudioPageState extends State<AudioPage> {
                   ),
                 ),
               ),
-              // ListTile(
-              //   dense: true,
-              //   title: const Text(
-              //     '定时关闭',
-              //     style: TextStyle(fontSize: 14),
-              //   ),
-              //   onTap: () {
-              //     Get.back();
-              //     _controller.showTimerDialog();
-              //   },
-              // ),
               ListTile(
                 dense: true,
-                title: const Text(
-                  '举报',
-                  style: TextStyle(fontSize: 14),
-                ),
+                leading: const Icon(Icons.warning_amber_rounded, size: 20),
+                title: const Text('举报', style: TextStyle(fontSize: 14)),
                 onTap: () {
                   Get.back();
                   PageUtils.reportVideo(_controller.oid.toInt());
                 },
               ),
+              if (_controller.player case final player?) ...[
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.info_outline, size: 20),
+                  title: const Text('播放信息', style: TextStyle(fontSize: 14)),
+                  onTap: () {
+                    Get.back();
+                    HeaderControlState.showPlayerInfo(context, player: player);
+                  },
+                ),
+                if (PlatformUtils.isMobile)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.volume_up, size: 20),
+                    title: Text(
+                      '播放器音量: ${player.getProperty('volume').subLength(3)}%',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    onTap: () {
+                      Get.back();
+                      showPlayerVolumeDialog(
+                        context,
+                        () {},
+                        onChanged: player.setVolume,
+                      );
+                    },
+                  ),
+              ],
             ],
           ),
         );
@@ -738,7 +764,7 @@ class _AudioPageState extends State<AudioPage> {
             ActionItem(
               icon: const Icon(FontAwesomeIcons.circlePlay),
               onTap: () {
-                _controller.player?.pause();
+                _controller.onPause();
                 PageUtils.toVideoPage(
                   cid: audioItem.associatedItem.subId.first.toInt(),
                   aid: audioItem.associatedItem.oid.toInt(),
@@ -754,25 +780,24 @@ class _AudioPageState extends State<AudioPage> {
   }
 
   void _onDragStart(ThumbDragDetails details) {
-    // do nothing
+    _controller
+      ..position.value = details.seconds
+      ..isDragging = true;
   }
 
   void _onDragUpdate(ThumbDragDetails details) {
-    _controller
-      ..isDragging = true
-      ..position.value = details.timeStamp;
+    _controller.position.value = details.seconds;
   }
 
-  void _onSeek(Duration value) {
+  void _onSeek(int milliseconds) {
     _controller
-      ..player?.seek(value)
-      ..isDragging = false;
+      ..isDragging = false
+      ..onSeek(Duration(milliseconds: milliseconds));
   }
 
   Widget _buildProgressBar(ColorScheme colorScheme) {
     final primary = colorScheme.primary;
     final thumbGlowColor = primary.withAlpha(80);
-    final bufferedBarColor = primary.withValues(alpha: 0.4);
     final baseBarColor = colorScheme.isDark
         ? const Color(0x33FFFFFF)
         : const Color(0x33999999);
@@ -782,7 +807,7 @@ class _AudioPageState extends State<AudioPage> {
         total: _controller.duration.value,
         baseBarColor: baseBarColor,
         progressBarColor: primary,
-        bufferedBarColor: bufferedBarColor,
+        bufferedBarColor: Colors.transparent,
         thumbColor: primary,
         thumbGlowColor: thumbGlowColor,
         thumbGlowRadius: 0,
@@ -839,7 +864,7 @@ class _AudioPageState extends State<AudioPage> {
               final position = _controller.position.value;
               if (_controller.player != null) {
                 return Text(
-                  DurationUtils.formatDuration(position.inSeconds),
+                  DurationUtils.formatDuration(position),
                 );
               }
               return const SizedBox.shrink();
@@ -848,7 +873,7 @@ class _AudioPageState extends State<AudioPage> {
               final duration = _controller.duration.value;
               if (_controller.player != null) {
                 return Text(
-                  DurationUtils.formatDuration(duration.inSeconds),
+                  DurationUtils.formatDuration(duration),
                 );
               }
               return const SizedBox.shrink();
@@ -915,9 +940,10 @@ class _AudioPageState extends State<AudioPage> {
             Expanded(
               child: Center(
                 child: ListView(
-                  key: const PageStorageKey(_AudioPageState),
+                  padding: .zero,
                   shrinkWrap: true,
-                  physics: const ClampingScrollPhysics(),
+                  physics: platformClampingPhysics,
+                  key: const PageStorageKey(_AudioPageState),
                   children: [
                     Center(
                       child: GestureDetector(
@@ -936,17 +962,16 @@ class _AudioPageState extends State<AudioPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    SelectableText(
+                    SelectionText(
                       audioItem.arc.title,
                       style: const TextStyle(height: 1.7, fontSize: 16),
-                      scrollPhysics: const NeverScrollableScrollPhysics(),
                     ),
                     const SizedBox(height: 12),
                     if (audioItem.owner.hasName()) ...[
                       GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: () {
-                          _controller.player?.pause();
+                          _controller.onPause();
                           Get.toNamed('/member?mid=${audioItem.owner.mid}');
                         },
                         child: Row(
@@ -961,7 +986,10 @@ class _AudioPageState extends State<AudioPage> {
                                 type: ImageType.avatar,
                               ),
                             Text(
-                              audioItem.owner.name,
+                              remarkedName(
+                                audioItem.owner.mid.toInt(),
+                                audioItem.owner.name,
+                              ),
                             ),
                           ],
                         ),
@@ -1002,10 +1030,7 @@ class _AudioPageState extends State<AudioPage> {
                     ),
                     if (audioItem.arc.hasDesc()) ...[
                       const SizedBox(height: 10),
-                      SelectableText(
-                        audioItem.arc.desc,
-                        scrollPhysics: const NeverScrollableScrollPhysics(),
-                      ),
+                      SelectionText(audioItem.arc.desc),
                     ],
                   ],
                 ),

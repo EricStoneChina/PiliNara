@@ -5,7 +5,8 @@ import 'package:PiliPlus/common/widgets/button/more_btn.dart';
 import 'package:PiliPlus/common/widgets/flutter/refresh_indicator.dart';
 import 'package:PiliPlus/common/widgets/loading_widget/http_error.dart';
 import 'package:PiliPlus/common/widgets/loading_widget/loading_widget.dart';
-import 'package:PiliPlus/common/widgets/scroll_physics.dart';
+import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
+import 'package:PiliPlus/common/widgets/scroll_physics.dart' show tabBarView;
 import 'package:PiliPlus/common/widgets/view_safe_area.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/models/common/fav_type.dart';
@@ -14,15 +15,15 @@ import 'package:PiliPlus/models_new/fav/fav_pgc/list.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_index_result/list.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_timeline/result.dart';
 import 'package:PiliPlus/pages/pgc/controller.dart';
+import 'package:PiliPlus/pages/home/home_preview_scope.dart';
 import 'package:PiliPlus/pages/pgc/widgets/pgc_card_v.dart';
 import 'package:PiliPlus/pages/pgc/widgets/pgc_card_v_timeline.dart';
 import 'package:PiliPlus/pages/pgc_index/controller.dart';
 import 'package:PiliPlus/pages/pgc_index/view.dart';
 import 'package:PiliPlus/pages/pgc_index/widgets/pgc_card_v_pgc_index.dart';
-import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/grid.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class PgcPage extends StatefulWidget {
   const PgcPage({
@@ -56,6 +57,7 @@ class _PgcPageState extends State<PgcPage> with AutomaticKeepAliveClientMixin {
     super.build(context);
     final ThemeData theme = Theme.of(context);
     return refreshIndicator(
+      key: HomePreviewScope.of(context) ? null : controller.refreshKey,
       onRefresh: controller.onRefresh,
       child: CustomScrollView(
         controller: controller.scrollController,
@@ -158,25 +160,26 @@ class _PgcPageState extends State<PgcPage> with AutomaticKeepAliveClientMixin {
                         child: TabBarView(
                           physics: const NeverScrollableScrollPhysics(),
                           children: response.map((item) {
-                            if (item.episodes.isNullOrEmpty) {
+                            final episodes = item.episodes;
+                            if (episodes == null || episodes.isEmpty) {
                               return const SizedBox.shrink();
                             }
                             return ListView.builder(
                               physics: const AlwaysScrollableScrollPhysics(),
                               scrollDirection: Axis.horizontal,
-                              itemCount: item.episodes!.length,
+                              itemCount: episodes.length,
                               padding: EdgeInsets.zero,
                               itemBuilder: (context, index) {
                                 return Container(
                                   width: Grid.smallCardWidth / 2,
                                   margin: EdgeInsets.only(
                                     left: Style.safeSpace,
-                                    right: index == item.episodes!.length - 1
+                                    right: index == episodes.length - 1
                                         ? Style.safeSpace
                                         : 0,
                                   ),
                                   child: PgcCardVTimeline(
-                                    item: item.episodes![index],
+                                    item: episodes[index],
                                   ),
                                 );
                               },
@@ -248,8 +251,7 @@ class _PgcPageState extends State<PgcPage> with AutomaticKeepAliveClientMixin {
                 ];
                 List<int> types = const [102, 2, 5, 3, 7];
                 Get.to(
-                  Scaffold(
-                    resizeToAvoidBottomInset: false,
+                  SimpleScaffold(
                     appBar: AppBar(title: const Text('索引')),
                     body: DefaultTabController(
                       length: types.length,

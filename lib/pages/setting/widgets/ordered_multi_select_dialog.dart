@@ -1,18 +1,22 @@
 import 'package:PiliPlus/pages/setting/widgets/checkbox_num_list_tile.dart';
 import 'package:collection/collection.dart';
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class OrderedMultiSelectDialog<T> extends StatefulWidget {
   final Iterable<T> initValues;
-  final String title;
+  final Widget title;
   final Map<T, String> values;
+  final Widget? Function(BuildContext context, T value)? subtitleBuilder;
+  final int minSelections;
 
   const OrderedMultiSelectDialog({
     super.key,
     required this.initValues,
     required this.values,
     required this.title,
+    this.subtitleBuilder,
+    this.minSelections = 0,
   });
 
   @override
@@ -35,7 +39,7 @@ class _OrderedMultiSelectDialogState<T>
     final theme = Theme.of(context);
     return AlertDialog(
       clipBehavior: Clip.hardEdge,
-      title: Text(widget.title),
+      title: widget.title,
       contentPadding: const EdgeInsets.only(top: 12),
       content: Material(
         type: .transparency,
@@ -52,14 +56,15 @@ class _OrderedMultiSelectDialogState<T>
                       i.value,
                       style: theme.textTheme.titleMedium!,
                     ),
+                    subtitle: widget.subtitleBuilder?.call(context, i.key),
                     onChanged: (value) {
                       if (value == null) {
                         _tempValues[i.key] = _tempValues.length + 1;
-                        (context as Element).markNeedsBuild();
+                        setState(() {});
                       } else {
                         final pos = _tempValues.remove(i.key)!;
                         if (pos == _tempValues.length + 1) {
-                          (context as Element).markNeedsBuild();
+                          setState(() {});
                         } else {
                           _tempValues.updateAll(
                             (key, value) => value > pos ? value - 1 : value,
@@ -87,11 +92,13 @@ class _OrderedMultiSelectDialogState<T>
           ),
         ),
         TextButton(
-          onPressed: () {
-            assert(_tempValues.values.isSorted((a, b) => a.compareTo(b)));
+          onPressed: _tempValues.length < widget.minSelections ? null : () {
+            assert(_tempValues.values.isSorted(Comparable.compare));
             Get.back(result: _tempValues.keys.toList());
           },
-          child: const Text('确定'),
+          child: Text(_tempValues.length < widget.minSelections
+              ? '至少选择${widget.minSelections}项'
+              : '确定'),
         ),
       ],
     );

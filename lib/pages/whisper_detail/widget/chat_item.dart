@@ -4,16 +4,16 @@ import 'dart:math' as math;
 import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
+import 'package:PiliPlus/common/widgets/emote_tooltip.dart';
 import 'package:PiliPlus/common/widgets/gesture/tap_gesture_recognizer.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/image_viewer/hero.dart';
+import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:PiliPlus/grpc/bilibili/im/interfaces/v1.pb.dart'
     show EmotionInfo;
 import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show Msg, MsgType;
 import 'package:PiliPlus/http/search.dart';
-import 'package:PiliPlus/models/common/badge_type.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
-import 'package:PiliPlus/models/common/image_type.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
@@ -22,9 +22,9 @@ import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class ChatItem extends StatelessWidget {
   static MsgType msgTypeFromValue(int value) {
@@ -64,7 +64,7 @@ class ChatItem extends StatelessWidget {
     late final ThemeData theme = Theme.of(context);
     late final Color textColor = isOwner
         ? theme.colorScheme.onSecondaryContainer
-        : theme.colorScheme.onSurfaceVariant;
+        : theme.colorScheme.onSurface;
     late final dynamic content = jsonDecode(item.content);
 
     Widget child = messageContent(
@@ -258,30 +258,35 @@ class ChatItem extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              for (final i in content['image_urls'])
-                NetworkImgLayer(
-                  width: 130,
-                  height: 73.125,
-                  src: i,
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            content['title'] ?? "",
-            style: TextStyle(
-              letterSpacing: 0.6,
-              height: 1.5,
-              color: textColor,
-              fontWeight: FontWeight.bold,
+          if (content['image_urls'] case final List urls
+              when urls.isNotEmpty) ...[
+            Row(
+              children: [
+                for (final url in urls)
+                  NetworkImgLayer(
+                    width: 130,
+                    height: 73.125,
+                    src: url,
+                  ),
+              ],
             ),
-          ),
-          if (content['summary'] != null && content['summary'] != '') ...[
+            const SizedBox(height: 6),
+          ],
+          if (content['title'] case final String title when title.isNotEmpty)
+            Text(
+              title,
+              style: TextStyle(
+                letterSpacing: 0.6,
+                height: 1.5,
+                color: textColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          if (content['summary'] case final String summary
+              when summary.isNotEmpty) ...[
             const SizedBox(height: 1),
             Text(
-              content['summary'],
+              summary,
               style: TextStyle(
                 letterSpacing: 0.6,
                 height: 1.5,
@@ -339,6 +344,7 @@ class ChatItem extends StatelessWidget {
                           cid: cid,
                           cover: i['cover_url'],
                           dimension: res!.dimension,
+                          // title: res.title,
                         );
                       }
                     } catch (err) {
@@ -410,7 +416,6 @@ class ChatItem extends StatelessWidget {
 
     return Center(
       child: Container(
-        clipBehavior: Clip.hardEdge,
         constraints: const BoxConstraints(maxWidth: 400.0),
         decoration: BoxDecoration(
           borderRadius: Style.mdRadius,
@@ -424,9 +429,7 @@ class ChatItem extends StatelessWidget {
                 try {
                   SmartDialog.showLoading();
                   final bvid = content["bvid"];
-                  final res = await SearchHttp.ab2cWithDimension(
-                    bvid: bvid,
-                  );
+                  final res = await SearchHttp.ab2cWithDimension(bvid: bvid);
                   final cid = res?.cid;
                   SmartDialog.dismiss();
                   if (cid != null) {
@@ -435,6 +438,7 @@ class ChatItem extends StatelessWidget {
                       cid: cid,
                       cover: content['cover'],
                       dimension: res!.dimension,
+                      // title: res.title,
                     );
                   }
                 } catch (err) {
@@ -449,15 +453,15 @@ class ChatItem extends StatelessWidget {
                     clipBehavior: Clip.none,
                     children: [
                       NetworkImgLayer(
-                        type: ImageType.emote,
                         width: constrains.maxWidth,
                         height: constrains.maxWidth / Style.aspectRatio16x9,
                         src: content['cover'],
+                        borderRadius: const .vertical(top: Style.imgRadius),
                       ),
                       PBadge(
                         left: 6,
                         bottom: 6,
-                        type: PBadgeType.gray,
+                        type: .gray,
                         text: content['times'] == 0
                             ? '--:--'
                             : DurationUtils.formatDuration(content['times']),
@@ -538,6 +542,7 @@ class ChatItem extends StatelessWidget {
               cid: cid,
               cover: content['thumb'],
               dimension: res!.dimension,
+              // title: res.title,
             );
           }
         };
@@ -687,13 +692,21 @@ class ChatItem extends StatelessWidget {
           final emoji = emojiMap[matchStr];
           if (emoji != null) {
             final size = emoji['size'];
+            final url = emoji['url'];
             children.add(
               WidgetSpan(
-                child: NetworkImgLayer(
-                  width: size,
-                  height: size,
-                  src: emoji['url'],
-                  type: ImageType.emote,
+                rawText: matchStr,
+                child: emoteTooltipBuilder(
+                  url: url,
+                  emote: matchStr,
+                  triggerMode: .tap,
+                  colorScheme: theme.colorScheme,
+                  child: NetworkImgLayer(
+                    width: size,
+                    height: size,
+                    src: url,
+                    type: .emote,
+                  ),
                 ),
               ),
             );
@@ -717,7 +730,7 @@ class ChatItem extends StatelessWidget {
         return '';
       },
     );
-    return SelectableText.rich(TextSpan(children: children));
+    return SelectionText.rich(TextSpan(children: children));
   }
 
   Widget msgTypeNotifyMsg_10(ThemeData theme, content) {
@@ -759,7 +772,7 @@ class ChatItem extends StatelessWidget {
             ),
             Divider(color: theme.colorScheme.primary.withValues(alpha: 0.05)),
             if ((content['text'] as String?)?.isNotEmpty == true)
-              SelectableText(content['text']),
+              Text(content['text']),
             if (modules != null && modules.isNotEmpty) ...[
               const SizedBox(height: 4),
               ...modules.map(
@@ -797,6 +810,7 @@ class ChatItem extends StatelessWidget {
           borderRadius: Style.mdRadius,
           child: CachedNetworkImage(
             width: maxWidth,
+            gaplessPlayback: true,
             memCacheWidth: maxWidth.cacheSize(context),
             imageUrl: ImageUtils.thumbnailUrl(content['pic_url']),
             placeholder: (_, _) => const SizedBox.shrink(),

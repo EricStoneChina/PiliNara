@@ -14,15 +14,16 @@ import 'package:PiliPlus/models_new/space/space/setting.dart';
 import 'package:PiliPlus/models_new/space/space/tab2.dart';
 import 'package:PiliPlus/pages/common/common_data_controller.dart';
 import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/extension/nested_scroll_ext.dart';
 import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/request_utils.dart';
 import 'package:PiliPlus/utils/share_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart'
     show ExtendedNestedScrollViewState;
-import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 class MemberController extends CommonDataController<SpaceData, SpaceData?>
     with GetTickerProviderStateMixin {
@@ -40,7 +41,10 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
 
   int? isFollowed; // 被关注
   RxInt relation = 0.obs;
-  bool get isFollow => relation.value != 0 && relation.value != 128;
+  bool get isFollow {
+    final relation = this.relation.value;
+    return relation != 0 && relation != 128 && relation != -1;
+  }
 
   SpaceSetting? spaceSetting;
   List<SpaceTab2>? tab2;
@@ -54,6 +58,7 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
   int? chargeCount;
   bool get hasCharge => chargeCount != null && chargeCount! > 0;
 
+  int? medal;
   List<Owner>? guards;
   Object? guardCount;
   bool get hasGuard => guards?.isNotEmpty ?? false;
@@ -62,7 +67,7 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
 
   final fromViewAid = Get.parameters['from_view_aid'];
 
-  final key = GlobalKey<ExtendedNestedScrollViewState>();
+  final scrollKey = GlobalKey<ExtendedNestedScrollViewState>();
 
   @override
   void onInit() {
@@ -87,17 +92,24 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
     final guard = data.guard;
     guards = guard?.item;
     guardCount = guard?.count;
+    // medal
+    medal = data.medal;
 
     reserves = data.reservationCardList;
 
-    if (data.relation == -1) {
-      relation.value = 128;
-    } else {
-      relation.value = card?.relation?.isFollow == 1
-          ? data.relSpecial == 1
-                ? -10
-                : card?.relation?.status ?? 2
-          : 0;
+    switch (data.relation) {
+      case -1:
+        relation.value = 128;
+      case -999:
+        if (data.guestRelation == -1) {
+          relation.value = -1;
+        }
+      default:
+        relation.value = card?.relation?.isFollow == 1
+            ? data.relSpecial == 1
+                  ? -10
+                  : card?.relation?.status ?? 2
+            : data.relation ?? 0;
     }
     tab2 = data.tab2;
     live = data.live;
@@ -128,7 +140,17 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
             return item.param == data.defaultTab;
           });
         }
-        tabs = tab2!.map((item) => Tab(text: item.title ?? '')).toList();
+        tabs = tab2!
+            .map(
+              (item) => Tab(
+                child: Text(
+                  item.title ?? '',
+                  softWrap: false,
+                  overflow: .fade,
+                ),
+              ),
+            )
+            .toList();
         tabController?.dispose();
         tabController = TabController(
           vsync: this,
@@ -215,6 +237,7 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
                 }
                 Pref.remarkMids = map;
                 remark.value = newRemark;
+                GlobalData().remarkVersion.value++;
                 Get.back();
               },
               child: const Text('确定'),
@@ -227,7 +250,8 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
 
   void blockUser(BuildContext context) {
     if (!account.isLogin) {
-      SmartDialog.showToast('账号未登录');
+      Pref.setBlackMid(mid);
+      SmartDialog.showToast('屏蔽成功');
       return;
     }
     showDialog(
@@ -237,9 +261,16 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
         content: Text(relation.value != 128 ? '确定拉黑UP主?' : '从黑名单移除UP主'),
         actions: [
           TextButton(
+            onPressed: () {
+              Get.back();
+              Pref.setBlackMid(mid);
+            },
+            child: const Text('本地屏蔽'),
+          ),
+          TextButton(
             onPressed: Get.back,
             child: Text(
-              '点错了',
+              '取消',
               style: TextStyle(color: Theme.of(context).colorScheme.outline),
             ),
           ),
@@ -310,13 +341,8 @@ class MemberController extends CommonDataController<SpaceData, SpaceData?>
   }
 
   void onTapTab(int value) {
-    if (tabController?.indexIsChanging == false &&
-        key.currentState?.outerController.hasClients == true) {
-      key.currentState!.outerController.animateTo(
-        key.currentState!.outerController.offset,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeInOut,
-      );
+    if (tabController?.indexIsChanging == false) {
+      scrollKey.currentState?.animToTop();
     }
   }
 

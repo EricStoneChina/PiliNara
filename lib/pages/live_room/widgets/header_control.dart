@@ -1,18 +1,32 @@
-import 'dart:io';
+import 'dart:io' show Platform;
+import 'dart:math' as math;
 
+import 'package:PiliPlus/common/style.dart';
+import 'package:PiliPlus/common/widgets/draggable_sheet/dyn.dart';
+import 'package:PiliPlus/common/widgets/flutter/popup_menu.dart';
 import 'package:PiliPlus/common/widgets/marquee.dart';
 import 'package:PiliPlus/pages/live_room/controller.dart';
+import 'package:PiliPlus/pages/setting/models/play_settings.dart'
+    show showPlayerVolumeDialog;
 import 'package:PiliPlus/pages/video/widgets/header_control.dart';
+import 'package:PiliPlus/pages/video/widgets/header_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
-import 'package:PiliPlus/utils/android/bindings.g.dart';
+import 'package:PiliPlus/utils/android/android_helper.dart';
+import 'package:PiliPlus/utils/extension/context_ext.dart';
+import 'package:PiliPlus/utils/extension/size_ext.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
-import 'package:flutter/material.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:collection/collection.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 class LiveHeaderControl extends StatefulWidget {
   const LiveHeaderControl({
@@ -41,7 +55,7 @@ class LiveHeaderControl extends StatefulWidget {
 }
 
 class _LiveHeaderControlState extends State<LiveHeaderControl>
-    with TimeBatteryMixin {
+    with HeaderMixin, TimeBatteryMixin {
   @override
   late final plPlayerController = widget.plPlayerController;
 
@@ -59,6 +73,8 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
     final isFullScreen = this.isFullScreen;
     showCurrTimeIfNeeded(isFullScreen);
     final liveController = widget.liveController;
+    final showCastButton =
+        PlatformUtils.isDesktop || !context.mediaQuerySize.isPortrait;
     Widget child;
     child = Obx(
       key: titleKey,
@@ -66,11 +82,8 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
         liveController.title.value,
         spacing: 30,
         velocity: 30,
-        style: const TextStyle(
-          fontSize: 15,
-          height: 1,
-          color: Colors.white,
-        ),
+        strutStyle: const StrutStyle(fontSize: 15, leading: 0),
+        style: const TextStyle(fontSize: 15, height: 1, color: Colors.white),
       ),
     );
     if (isFullScreen) {
@@ -100,17 +113,16 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
       );
     }
     child = Expanded(child: child);
-    return AppBar(
-      backgroundColor: Colors.transparent,
-      foregroundColor: Colors.white,
-      primary: false,
-      automaticallyImplyLeading: false,
-      titleSpacing: 14,
-      title: Row(
+
+    const btnHeight = 30.0;
+
+    return Padding(
+      padding: const .symmetric(horizontal: 14, vertical: 13),
+      child: Row(
         children: [
           if (isFullScreen || plPlayerController.isDesktopPip)
             ComBtn(
-              height: 30,
+              height: btnHeight,
               tooltip: '返回',
               icon: const Icon(FontAwesomeIcons.arrowLeft, size: 15),
               onTap: () {
@@ -128,7 +140,7 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
             Obx(() {
               final isAlwaysOnTop = plPlayerController.isAlwaysOnTop.value;
               return ComBtn(
-                height: 30,
+                height: btnHeight,
                 tooltip: '${isAlwaysOnTop ? '取消' : ''}置顶',
                 icon: isAlwaysOnTop
                     ? const Icon(
@@ -146,7 +158,7 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
             }),
           if (isFullScreen || PlatformUtils.isDesktop)
             ComBtn(
-              height: 30,
+              height: btnHeight,
               tooltip: '发弹幕',
               icon: const Icon(
                 size: 18,
@@ -155,16 +167,16 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
               ),
               onTap: widget.onSendDanmaku,
             ),
-          if (Platform.isAndroid || (PlatformUtils.isDesktop && !isFullScreen))
+          if ((Platform.isAndroid && PiliAndroidHelper.isPipAvailable) ||
+              (Platform.isIOS && IOSPipHelper.isAvailable) ||
+              (PlatformUtils.isDesktop && !isFullScreen))
             ComBtn(
-              height: 30,
+              height: btnHeight,
               tooltip: '画中画',
               onTap: () {
                 if (PlatformUtils.isDesktop) {
                   plPlayerController.toggleDesktopPip();
-                  return;
-                }
-                if (AndroidHelper.isPipAvailable) {
+                } else {
                   plPlayerController.enterPip();
                 }
               },
@@ -174,36 +186,46 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
                 color: Colors.white,
               ),
             ),
+          if (showCastButton)
+            ComBtn(
+              height: 30,
+              tooltip: '投屏',
+              onTap: liveController.onCast,
+              icon: const Icon(
+                size: 18,
+                Icons.cast,
+                color: Colors.white,
+              ),
+            ),
           Obx(
-            () {
-              final onlyPlayAudio = plPlayerController.onlyPlayAudio.value;
-              return ComBtn(
-                height: 30,
-                tooltip: '仅播放音频',
-                onTap: () {
-                  plPlayerController.onlyPlayAudio.value = !onlyPlayAudio;
-                  widget.onPlayAudio();
-                },
-                icon: onlyPlayAudio
-                    ? const Icon(
-                        size: 18,
-                        MdiIcons.musicCircle,
-                        color: Colors.white,
-                      )
-                    : const Icon(
-                        size: 18,
-                        MdiIcons.musicCircleOutline,
-                        color: Colors.white,
-                      ),
-              );
-            },
+            () => ComBtn(
+              height: btnHeight,
+              tooltip: '仅播放音频',
+              onTap: () {
+                plPlayerController.onlyPlayAudio.toggle();
+                plPlayerController.markManualOnlyPlayAudio(
+                    plPlayerController.onlyPlayAudio.value);
+                widget.onPlayAudio();
+              },
+              icon: plPlayerController.onlyPlayAudio.value
+                  ? const Icon(
+                      size: 18,
+                      MdiIcons.musicCircle,
+                      color: Colors.white,
+                    )
+                  : const Icon(
+                      size: 18,
+                      MdiIcons.musicCircleOutline,
+                      color: Colors.white,
+                    ),
+            ),
           ),
           if (PlatformUtils.isMobile)
             Obx(() {
               final continuePlayInBackground =
                   plPlayerController.continuePlayInBackground.value;
               return ComBtn(
-                height: 30,
+                height: btnHeight,
                 tooltip: '${continuePlayInBackground ? '关闭' : ''}后台播放',
                 onTap: plPlayerController.setContinuePlayInBackground,
                 icon: continuePlayInBackground
@@ -220,7 +242,7 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
               );
             }),
           ComBtn(
-            height: 30,
+            height: btnHeight,
             tooltip: '定时关闭',
             onTap: () => shutdownTimerService.showScheduleExitDialog(
               context,
@@ -233,21 +255,272 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
               color: Colors.white,
             ),
           ),
-          ComBtn(
-            height: 30,
-            tooltip: '播放信息',
-            onTap: () => HeaderControlState.showPlayerInfo(
-              context,
-              plPlayerController: plPlayerController,
+          if (plPlayerController.videoPlayerController case final player?)
+            SizedBox.square(
+              dimension: 30,
+              child: StaticPopupMenuButton(
+                iconSize: 18,
+                padding: .zero,
+                menuPadding: EdgeInsets.zero,
+                menuItemOuterPadding: EdgeInsets.zero,
+                icon: const Icon(Icons.more_vert, color: Colors.white),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    height: 42,
+                    onTap: _showLiveStreamDialog,
+                    child: const Row(
+                      spacing: 8,
+                      children: [
+                        Icon(Icons.alt_route, size: 20),
+                        Text('切换路线', style: TextStyle(fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                  if (!showCastButton)
+                    PopupMenuItem(
+                      height: 42,
+                      onTap: liveController.onCast,
+                      child: const Row(
+                        spacing: 8,
+                        children: [
+                          Icon(Icons.cast, size: 20),
+                          Text('投屏', style: TextStyle(fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  // 全屏下也能进入（点击后先退全屏再收起）；系统 PiP 中没有控制栏，排除
+                  // 桌面小窗形态下不能 pop 本页，不提供入口
+                  if (!plPlayerController.isDesktopPip &&
+                      !plPlayerController.isPipMode)
+                    PopupMenuItem(
+                      height: 42,
+                      onTap: () => liveController.onRequestInAppPip?.call(),
+                      child: const Row(
+                        spacing: 8,
+                        children: [
+                          Icon(Icons.picture_in_picture_alt_outlined, size: 20),
+                          Text('应用内画中画', style: TextStyle(fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  PopupMenuItem(
+                    height: 42,
+                    child: const Row(
+                      spacing: 8,
+                      children: [
+                        Icon(Icons.info_outline, size: 20),
+                        Text('播放信息', style: TextStyle(fontSize: 14)),
+                      ],
+                    ),
+                    onTap: () => HeaderControlState.showPlayerInfo(
+                      context,
+                      player: player,
+                    ),
+                  ),
+                  if (!plPlayerController.onlyPlayAudio.value)
+                    PopupMenuItem(
+                      height: 42,
+                      onTap: showVideoPictureParameters,
+                      child: const Row(
+                        spacing: 8,
+                        children: [
+                          Icon(Icons.tune, size: 20),
+                          Text('视频参数', style: TextStyle(fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  if (PlatformUtils.isMobile)
+                    PopupMenuItem(
+                      height: 42,
+                      child: Row(
+                        spacing: 8,
+                        children: [
+                          const Icon(Icons.volume_up, size: 20),
+                          Text(
+                            '播放器音量: ${(double.tryParse(player.getProperty('volume')) ?? 0).toStringAsFixed(1)}%',
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                      onTap: () => showPlayerVolumeDialog(
+                        context,
+                        () {},
+                        onChanged: player.setVolume,
+                      ),
+                    ),
+                ],
+              ),
             ),
-            icon: const Icon(
-              size: 18,
-              Icons.info_outline,
-              color: Colors.white,
-            ),
-          ),
         ],
       ),
     );
   }
+
+  void _showLiveStreamDialog() {
+    final controller = widget.liveController;
+    if (controller.stream == null) {
+      SmartDialog.showToast('直播流信息未就绪');
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxWidth: math.min(640, context.mediaQueryShortestSide),
+      ),
+      builder: (context) {
+        final maxChildSize =
+            PlatformUtils.isMobile && !context.mediaQuerySize.isPortrait
+            ? 1.0
+            : 0.7;
+        return DynDraggableScrollableSheet(
+          minChildSize: 0,
+          maxChildSize: maxChildSize,
+          snap: true,
+          expand: false,
+          snapSizes: [maxChildSize],
+          initialChildSize: maxChildSize,
+          builder: (context, scrollController) {
+            final colorScheme = ColorScheme.of(context);
+            final secondary = colorScheme.secondary;
+            final onSurfaceVariant = colorScheme.onSurfaceVariant;
+            final currStyle = TextStyle(fontSize: 14, color: secondary);
+            return Column(
+              children: [
+                InkWell(
+                  onTap: Get.back,
+                  borderRadius: Style.bottomSheetRadius,
+                  child: SizedBox(
+                    height: 35,
+                    child: Center(
+                      child: Container(
+                        width: 32,
+                        height: 3,
+                        decoration: BoxDecoration(
+                          color: colorScheme.outline,
+                          borderRadius: const .all(.circular(1.5)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    padding: .only(
+                      bottom: MediaQuery.viewPaddingOf(context).bottom + 100,
+                    ),
+                    children: controller.stream!.mapIndexed((si, stream) {
+                      final isCurrStream = si == controller.streamIndex;
+                      final streamColor = isCurrStream
+                          ? secondary
+                          : onSurfaceVariant;
+                      return _ExpansionTile(
+                        initiallyExpanded: isCurrStream,
+                        iconColor: streamColor,
+                        collapsedIconColor: streamColor,
+                        title: Text(
+                          stream.protocolName ?? si.toString(),
+                          style: isCurrStream
+                              ? currStyle
+                              : const TextStyle(fontSize: 14),
+                        ),
+                        children: stream.format.mapIndexed((fi, format) {
+                          final isCurrFormat =
+                              isCurrStream && fi == controller.formatIndex;
+                          final formatColor = isCurrFormat
+                              ? secondary
+                              : onSurfaceVariant;
+                          return _ExpansionTile(
+                            initiallyExpanded: isCurrFormat,
+                            iconColor: formatColor,
+                            collapsedIconColor: formatColor,
+                            title: Text(
+                              format.formatName ?? fi.toString(),
+                              style: isCurrFormat
+                                  ? currStyle
+                                  : const TextStyle(fontSize: 14),
+                            ),
+                            children: format.codec.mapIndexed((ci, codec) {
+                              final isCurrCodec =
+                                  isCurrFormat && ci == controller.codecIndex;
+                              final codecColor = isCurrCodec
+                                  ? secondary
+                                  : onSurfaceVariant;
+                              return _ExpansionTile(
+                                initiallyExpanded: isCurrCodec,
+                                iconColor: codecColor,
+                                collapsedIconColor: codecColor,
+                                title: Text(
+                                  '${codec.codecName ?? ci.toString()} (${codec.currentQn.desc})',
+                                  style: isCurrCodec
+                                      ? currStyle
+                                      : const TextStyle(fontSize: 14),
+                                ),
+                                children: codec.urlInfo.mapIndexed((ui, url) {
+                                  final isCurrUrl =
+                                      isCurrCodec &&
+                                      ui == controller.liveUrlIndex;
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      '${url.host}...',
+                                      style: isCurrUrl
+                                          ? const TextStyle(fontSize: 14)
+                                          : TextStyle(
+                                              fontSize: 14,
+                                              color: onSurfaceVariant,
+                                            ),
+                                    ),
+                                    selected: isCurrUrl,
+                                    onTap: isCurrUrl
+                                        ? null
+                                        : () {
+                                            Get.back();
+                                            controller.initLiveUrl(
+                                              streamIndex: si,
+                                              formatIndex: fi,
+                                              codecIndex: ci,
+                                              liveUrlIndex: ui,
+                                            );
+                                            GStorage.setting.put(
+                                              SettingBoxKey.liveStream,
+                                              [
+                                                stream.protocolName!,
+                                                format.formatName!,
+                                                codec.codecName!,
+                                              ],
+                                            );
+                                          },
+                                  );
+                                }).toList(),
+                              );
+                            }).toList(),
+                          );
+                        }).toList(),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _ExpansionTile extends ExpansionTile {
+  const _ExpansionTile({
+    required super.title,
+    super.initiallyExpanded,
+    super.iconColor,
+    super.collapsedIconColor,
+    super.children,
+  }) : super(
+         dense: true,
+         childrenPadding: const .only(left: 20),
+       );
 }

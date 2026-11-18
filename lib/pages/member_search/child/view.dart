@@ -8,10 +8,9 @@ import 'package:PiliPlus/pages/member_search/child/widgets/search_archive_grpc.d
 import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/grid.dart';
 import 'package:PiliPlus/utils/waterfall.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:get/get.dart';
-import 'package:waterfall_flow/waterfall_flow.dart'
-    hide SliverWaterfallFlowDelegateWithMaxCrossAxisExtent;
+import 'package:material_ui/material_ui.dart';
 
 class MemberSearchChildPage extends StatefulWidget {
   const MemberSearchChildPage({
@@ -84,25 +83,17 @@ class _MemberSearchChildPageState extends State<MemberSearchChildPage>
                 ),
                 MemberSearchType.dynamic =>
                   GlobalData().dynamicsWaterfallFlow
-                      ? SliverWaterfallFlow(
+                      ? SliverMasonryGrid(
+                          crossAxisSpacing: 4,
                           gridDelegate: dynGridDelegate,
                           delegate: SliverChildBuilderDelegate(
-                            (_, index) {
-                              if (index == response.length - 1) {
-                                _controller.onLoadMore();
-                              }
-                              return DynamicPanel(item: response[index]);
-                            },
+                            (context, index) => _itemBuilder(response, index),
                             childCount: response.length,
                           ),
                         )
                       : SliverList.builder(
-                          itemBuilder: (context, index) {
-                            if (index == response.length - 1) {
-                              _controller.onLoadMore();
-                            }
-                            return DynamicPanel(item: response[index]);
-                          },
+                          itemBuilder: (context, index) =>
+                              _itemBuilder(response, index),
                           itemCount: response.length,
                         ),
               }
@@ -112,6 +103,13 @@ class _MemberSearchChildPageState extends State<MemberSearchChildPage>
         onReload: _controller.onReload,
       ),
     };
+  }
+
+  Widget _itemBuilder(List list, int index) {
+    if (index == list.length - 1) {
+      _controller.onLoadMore();
+    }
+    return DynamicPanel(item: list[index]);
   }
 
   @override

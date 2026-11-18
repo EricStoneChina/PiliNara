@@ -1,14 +1,14 @@
 name: Build
 
 on:
-  pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-    paths-ignore:
-      - "**.md"
+  # pull_request:
+  #     types:
+  #         - opened
+  #         - synchronize
+  #         - reopened
+  #         - ready_for_review
+  #     paths-ignore:
+  #         - "**.md"
   workflow_dispatch:
     inputs:
       build_android:
@@ -28,6 +28,11 @@ on:
         type: boolean
       build_win_x64:
         description: "Build Win-x64"
+        required: false
+        default: false
+        type: boolean
+      build_win_x64_newlibmpv:
+        description: "Build Win-x64 (NewLibmpv)"
         required: false
         default: false
         type: boolean
@@ -51,7 +56,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -93,11 +98,11 @@ jobs:
         shell: pwsh
         run: lib/scripts/build.ps1 android
 
-      - name: Flutter Build Release Apk (Manual)
+      - name: Flutter Build Release Apk
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: flutter build apk --release --split-per-abi --dart-define-from-file=pili_release.json --pub
 
-      - name: Flutter Build Dev Apk (PR)
+      - name: Flutter Build Dev Apk
         if: ${{ github.event_name == 'pull_request' }}
         run: flutter build apk --release --split-per-abi --android-project-arg dev=1 --pub
 
@@ -109,12 +114,13 @@ jobs:
             mv "$file" "PiliNara_android_${{ env.version }}_${abi}.apk"
           done
 
-      - name: Release to GitHub
+      - name: Release
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag }}
           name: ${{ github.event.inputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: PiliNara_android_*.apk
 
       - name: Upload arm64-v8a
@@ -155,6 +161,13 @@ jobs:
   win_x64:
     if: ${{ (github.event_name == 'pull_request' && github.repository == 'Starfallan/PiliNara') || github.event.inputs.build_win_x64 == 'true' }}
     uses: ./.github/workflows/win_x64.yml
+    permissions: write-all
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || '' }}
+
+  win_x64_newlibmpv:
+    if: ${{ github.event.inputs.build_win_x64_newlibmpv == 'true' }}
+    uses: ./.github/workflows/win_x64_newlibmpv.yml
     permissions: write-all
     with:
       tag: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || '' }}

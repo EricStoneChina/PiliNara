@@ -20,8 +20,8 @@ library;
 
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart' hide ListTile;
 import 'package:flutter/rendering.dart';
+import 'package:material_ui/material_ui.dart' hide ListTile;
 
 // Examples can assume:
 // int _act = 1;
@@ -756,6 +756,11 @@ class ListTile extends StatelessWidget {
     final ListTileThemeData defaults = theme.useMaterial3
         ? _LisTileDefaultsM3(context)
         : _LisTileDefaultsM2(context, listTileStyle);
+    final ShapeBorder? effectiveShape =
+        shape ??
+        tileTheme.shape ??
+        theme.listTileTheme.shape ??
+        defaults.shape;
 
     final Color backgroundColor =
         tileColor ??
@@ -996,7 +1001,7 @@ class ListTile extends StatelessWidget {
     }
 
     return InkWell(
-      customBorder: shape ?? tileTheme.shape,
+      customBorder: effectiveShape,
       onTap: enabled ? onTap : null,
       onTapUp: enabled ? onTapUp : null,
       onLongPress: enabled ? onLongPress : null,

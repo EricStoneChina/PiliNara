@@ -12,21 +12,20 @@ abstract final class RecommendFilter {
   static bool applyFilterToRankVideos = Pref.applyFilterToRankVideos;
   static bool applyFilterToSearch = Pref.applyFilterToSearch;
 
-  static RegExp rcmdRegExp = RegExp(
-    Pref.parseBanWordToRegex(Pref.banWordForRecommend),
-    caseSensitive: false,
+  static List<RegExp> rcmdRegExp = Pref.compileBanWord(Pref.banWordForRecommend);
+  static bool enableFilter = rcmdRegExp.isNotEmpty;
+  static List<RegExp> rcmdUpNameRegExp = Pref.compileBanWord(
+    Pref.banWordForRecommendUpName,
   );
-  static bool enableFilter = rcmdRegExp.pattern.isNotEmpty;
+  static bool enableUpNameFilter = rcmdUpNameRegExp.isNotEmpty;
   static Map<int, String> recommendBlockedMids = Pref.recommendBlockedMids;
 
   static bool isWhitelisted(int? mid) {
     return mid != null && GlobalData().whitelistMids.containsKey(mid);
   }
 
-  static bool filter(BaseVideoItemModel videoItem) {
-    if (isWhitelisted(videoItem.owner.mid)) {
-      return false;
-    }
+  // (web/app)rcmd
+  static bool filterWithExempt(BaseVideoItemModel videoItem) {
     //由于相关视频中没有已关注标签，只能视为非关注视频
     if (videoItem.isFollowed && exemptFilterForFollowed) {
       return false;
@@ -34,6 +33,7 @@ abstract final class RecommendFilter {
     return filterAll(videoItem);
   }
 
+  /// hot/rank/[filterAll]
   static bool filterLikeRatio(int? like, int? view) {
     if (view != null) {
       return (view > -1 && view < minPlayForRcmd) ||
@@ -44,31 +44,47 @@ abstract final class RecommendFilter {
     return false;
   }
 
+  /// hot/rank/[filterAll]
   static bool filterTitle(String title) {
     return (enableFilter && rcmdRegExp.hasMatch(title));
   }
 
+  static bool filterUpName(String? name) {
+    return enableUpNameFilter &&
+        name != null &&
+        rcmdUpNameRegExp.hasMatch(name);
+  }
+
   static bool filterUser(int? mid) {
-    return !isWhitelisted(mid) &&
-        recommendBlockedMids.isNotEmpty &&
+    return recommendBlockedMids.isNotEmpty &&
         mid != null &&
         recommendBlockedMids.containsKey(mid);
   }
 
+  /// [filterAll]
+  static bool filterDuration(int duration) {
+    return duration > 0 && duration < minDurationForRcmd;
+  }
+
+  /// related/[filterWithExempt]
   static bool filterAll(BaseVideoItemModel videoItem) {
-    if (isWhitelisted(videoItem.owner.mid)) {
+    final mid = videoItem.owner.mid;
+    if (filterUser(mid)) {
+      return true;
+    }
+    if (isWhitelisted(mid)) {
       return false;
     }
-    return (videoItem.duration > 0 &&
-            videoItem.duration < minDurationForRcmd) ||
+    return filterDuration(videoItem.duration) ||
         filterLikeRatio(videoItem.stat.like, videoItem.stat.view) ||
         filterTitle(videoItem.title) ||
-        filterUser(videoItem.owner.mid);
+        filterUpName(videoItem.owner.name);
   }
 
   static bool searchShouldRemove(int? mid, String title) {
     if (!applyFilterToSearch) return false;
+    if (filterUser(mid)) return true;
     if (isWhitelisted(mid)) return false;
-    return filterTitle(title) || filterUser(mid);
+    return filterTitle(title);
   }
 }

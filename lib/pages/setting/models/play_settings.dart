@@ -1,57 +1,75 @@
 import 'dart:io' show Platform;
 
 import 'package:PiliPlus/common/widgets/custom_icon.dart';
-import 'package:PiliPlus/models/common/super_chat_time_type.dart';
+import 'package:PiliPlus/common/widgets/image_grid/image_grid_view.dart';
+import 'package:PiliPlus/models/common/audio_normalization.dart';
 import 'package:PiliPlus/models/common/super_chat_type.dart';
+import 'package:PiliPlus/models/common/super_resolution_type.dart';
+import 'package:PiliPlus/models/common/super_chat_time_type.dart';
 import 'package:PiliPlus/models/common/video/subtitle_pref_type.dart';
-import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
-import 'package:PiliPlus/pages/setting/pages/fullscreen_sc_size.dart';
+import 'package:PiliPlus/pages/setting/pages/fullscreen_sc.dart';
 import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
-import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/pages/setting/widgets/slider_dialog.dart';
+import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/bottom_progress_behavior.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/utils/android/android_helper.dart';
+import 'package:PiliPlus/utils/desktop/window_controller.dart';
+import 'package:PiliPlus/utils/extension/num_ext.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart';
 
 List<SettingsModel> get playSettings => [
-  const SwitchModel(
-    title: '弹幕开关',
-    subtitle: '是否展示弹幕',
-    leading: Icon(CustomIcons.dm_settings),
-    setKey: SettingBoxKey.enableShowDanmaku,
-    defaultVal: true,
-  ),
-  if (PlatformUtils.isMobile)
-    const SwitchModel(
-      title: '启用点击弹幕',
-      subtitle: '点击弹幕悬停，支持点赞、复制、举报操作',
-      leading: Icon(Icons.touch_app_outlined),
-      setKey: SettingBoxKey.enableTapDm,
-      defaultVal: true,
-    ),
   NormalModel(
     onTap: (context, setState) => Get.toNamed('/playSpeedSet'),
     leading: const Icon(Icons.speed_outlined),
     title: '倍速设置',
     subtitle: '设置视频播放速度',
   ),
-  if (Platform.isAndroid)
+  if (kDebugMode || Platform.isAndroid)
     NormalModel(
       onTap: _showAngleDegreesDialog,
       leading: const Icon(MdiIcons.angleAcute),
       title: '倾斜角度阈值',
       getSubtitle: () => '当前:「${Pref.angleDegrees}°」',
     ),
+  if (kDebugMode || Platform.isAndroid)
+    NormalModel(
+      title: '音量均衡',
+      leading: const Icon(Icons.multitrack_audio),
+      getSubtitle: () {
+        final audioNormalization = AudioNormalization.getTitleFromConfig(
+          Pref.audioNormalization,
+        );
+        String fallback = Pref.fallbackNormalization;
+        if (fallback == '0') {
+          fallback = '';
+        } else {
+          fallback =
+              '，无参数时:「${AudioNormalization.getTitleFromConfig(fallback)}」';
+        }
+        return '当前:「$audioNormalization」$fallback';
+      },
+      onTap: audioNormalization,
+    ),
+  NormalModel(
+    title: '超分辨率',
+    leading: const Icon(Icons.stay_current_landscape_outlined),
+    getSubtitle: () =>
+        '当前:「${Pref.superResolutionType.label}」\n默认设置对番剧生效, 其他视频默认关闭\n超分辨率需要启用硬件解码, 若启用硬件解码后仍然不生效, 尝试切换硬件解码器为 auto-copy',
+    onTap: _showSuperResolutionDialog,
+  ),
   const SwitchModel(
     title: '自动播放',
     subtitle: '进入详情页自动播放',
@@ -59,11 +77,33 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.autoPlayEnable,
     defaultVal: false,
   ),
+  if (PlatformUtils.isMobile)
+    const SwitchModel(
+      title: '仅 WiFi 自动播放',
+      subtitle: '仅在 WiFi 下自动播放，蜂窝网络下进入详情页只显示封面（需开启自动播放）',
+      leading: Icon(Icons.wifi),
+      setKey: SettingBoxKey.autoPlayWifiOnly,
+      defaultVal: false,
+    ),
   const SwitchModel(
     title: '全屏显示锁定按钮',
     leading: Icon(Icons.lock_outline),
     setKey: SettingBoxKey.showFsLockBtn,
     defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '锁定后禁止重力感应旋转',
+    subtitle: '全屏锁定后不再随设备方向翻转（仅横屏视频生效）',
+    leading: Icon(Icons.screen_lock_rotation),
+    setKey: SettingBoxKey.lockFsRotation,
+    defaultVal: false,
+  ),
+  const SwitchModel(
+    title: '锁定按钮显示在右侧',
+    subtitle: '开启后锁定按钮移至右侧，与截图按钮一同垂直居中排列',
+    leading: Icon(Icons.keyboard_double_arrow_right),
+    setKey: SettingBoxKey.showFsLockBtnRight,
+    defaultVal: false,
   ),
   const SwitchModel(
     title: '全屏显示截图按钮',
@@ -90,6 +130,12 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableSlideVolumeBrightness,
     defaultVal: true,
   ),
+  const SwitchModel(
+    title: '滚轮调节音量',
+    leading: Icon(Icons.mouse_outlined),
+    setKey: SettingBoxKey.enableScrollVolume,
+    defaultVal: true,
+  ),
   if (Platform.isAndroid)
     const SwitchModel(
       title: '调节系统亮度',
@@ -101,19 +147,15 @@ List<SettingsModel> get playSettings => [
     SwitchModel(
       title: '应用内音量',
       subtitle: '开启后在应用内调节音量不会改变系统音量',
-      leading: Icon(Icons.volume_up_outlined),
+      leading: const Icon(Icons.volume_up_outlined),
       setKey: SettingBoxKey.enableAppVolume,
       defaultVal: false,
       onChanged: (value) async {
-        // 设置变更时通知播放器控制器
-        final controller = PlPlayerController.getInstance();
-        if (controller != null) {
-          await controller.onAppVolumeSettingChanged();
-        }
+        await PlPlayerController.instance?.onAppVolumeSettingChanged();
       },
     ),
   if (PlatformUtils.isMobile && Pref.enableAppVolume)
-    SwitchModel(
+    const SwitchModel(
       title: '音量增强',
       subtitle: '在应用内音量模式下允许放大至 200%',
       leading: Icon(Icons.volume_up_outlined),
@@ -126,6 +168,116 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableSlideFS,
     defaultVal: true,
   ),
+  const SwitchModel(
+    title: '提前初始化播放器',
+    subtitle: '相对减少手动播放加载时间',
+    leading: Icon(Icons.play_circle_outlined),
+    setKey: SettingBoxKey.preInitPlayer,
+    defaultVal: false,
+  ),
+  const SwitchModel(
+    title: '滑动跳转预览视频缩略图',
+    leading: Icon(Icons.preview_outlined),
+    setKey: SettingBoxKey.showSeekPreview,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '启用双指缩小视频',
+    leading: Icon(Icons.pinch),
+    setKey: SettingBoxKey.enableShrinkVideoSize,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '启用双指旋转画面',
+    subtitle: '双指缩放时可旋转画面，松手自动吸附到直角',
+    leading: Icon(Icons.rotate_90_degrees_ccw),
+    setKey: SettingBoxKey.enablePinchRotate,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '启用拖拽字幕调整底部边距',
+    leading: Icon(MdiIcons.dragVariant),
+    setKey: SettingBoxKey.enableDragSubtitle,
+    defaultVal: false,
+  ),
+  const SwitchModel(
+    title: '视频页显示相关视频',
+    leading: Icon(MdiIcons.motionPlayOutline),
+    setKey: SettingBoxKey.showRelatedVideo,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '默认展开视频简介',
+    leading: Icon(Icons.expand_more),
+    setKey: SettingBoxKey.alwaysExpandIntroPanel,
+    defaultVal: false,
+  ),
+  const SwitchModel(
+    title: '横屏自动展开视频简介',
+    leading: Icon(Icons.expand_more),
+    setKey: SettingBoxKey.expandIntroPanelH,
+    defaultVal: false,
+  ),
+  SwitchModel(
+    title: '横屏分P/合集列表显示在Tab栏',
+    leading: const Icon(Icons.format_list_numbered_rtl_sharp),
+    setKey: SettingBoxKey.horizontalSeasonPanel,
+    defaultVal: Pref.horizontalScreen,
+  ),
+  SwitchModel(
+    title: '横屏播放页在侧栏打开UP主页',
+    leading: const Icon(Icons.account_circle_outlined),
+    setKey: SettingBoxKey.horizontalMemberPage,
+    defaultVal: Pref.horizontalScreen,
+  ),
+  SwitchModel(
+    title: '横屏在侧栏打开图片预览',
+    leading: const Icon(Icons.photo_outlined),
+    setKey: SettingBoxKey.horizontalPreview,
+    defaultVal: false,
+    onChanged: (value) => ImageGridView.horizontalPreview = value,
+  ),
+  const SwitchModel(
+    title: '显示视频警告/争议信息',
+    leading: Icon(Icons.warning_amber_rounded),
+    setKey: SettingBoxKey.showArgueMsg,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '显示视频分段信息',
+    leading: Icon(CustomIcons.view_headline_rotate_90),
+    setKey: SettingBoxKey.showViewPoints,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '显示继续播放分P提示',
+    leading: Icon(Icons.local_parking),
+    setKey: SettingBoxKey.continuePlayingPart,
+    defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '分P/合集：倒序播放从首集开始播放',
+    subtitle: '开启则自动切换为倒序首集，否则保持当前集',
+    leading: Icon(MdiIcons.sort),
+    setKey: SettingBoxKey.reverseFromFirst,
+    defaultVal: true,
+  ),
+  if (PlatformUtils.isMobile)
+    NormalModel(
+      title: '播放器音量',
+      leading: const Icon(Icons.volume_up),
+      getSubtitle: () =>
+          '当前:「${Pref.playerVolume.toStringAsFixed(0)}%」\n'
+          '在系统音量基础上增益；开启应用内音量后不生效',
+      onTap: showPlayerVolumeDialog,
+    )
+  else
+    NormalModel(
+      title: '最高音量',
+      leading: const Icon(Icons.volume_up),
+      getSubtitle: () => '当前:「${(Pref.maxVolume * 100).toStringAsFixed(0)}%」',
+      onTap: _showMaxVolumeDialog,
+    ),
   getVideoFilterSelectModel(
     title: '双击快进/快退时长',
     suffix: 's',
@@ -161,11 +313,7 @@ List<SettingsModel> get playSettings => [
       leading: const Icon(Icons.pause_circle_outline),
       setKey: SettingBoxKey.pauseOnMinimize,
       defaultVal: false,
-      onChanged: (value) {
-        try {
-          Get.find<MainController>().pauseOnMinimize = value;
-        } catch (_) {}
-      },
+      onChanged: (value) => WindowController.instance.pauseOnMinimize = value,
     ),
   const SwitchModel(
     title: '启用键盘控制',
@@ -173,11 +321,14 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.keyboardControl,
     defaultVal: true,
   ),
-  NormalModel(
+  PopupModel(
     title: 'SuperChat (醒目留言) 显示类型',
     leading: const Icon(Icons.live_tv),
-    getSubtitle: () => '当前:「${Pref.superChatType.title}」',
-    onTap: _showSuperChatDialog,
+    value: () => Pref.superChatType,
+    items: SuperChatType.values,
+    onSelected: (value, setState) => GStorage.setting
+        .put(SettingBoxKey.superChatType, value.index)
+        .whenComplete(setState),
   ),
   NormalModel(
     title: 'SuperChat 发送时间显示',
@@ -186,10 +337,10 @@ List<SettingsModel> get playSettings => [
     onTap: _showSuperChatTimeDialog,
   ),
   NormalModel(
-    title: '全屏 SC 大小',
-    subtitle: 'SuperChat (醒目留言) 大小设置',
+    title: '全屏 SuperChat 设置',
+    subtitle: '全屏 SuperChat (醒目留言) 大小、不透明度、缩放设置',
     leading: const Icon(Icons.open_in_full),
-    onTap: (_, _) => Get.to(const FullScreenScSize()),
+    onTap: (_, _) => Get.to(const FullScreenSc()),
   ),
   const SwitchModel(
     title: '竖屏扩大展示',
@@ -219,13 +370,36 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableLongShowControl,
     defaultVal: false,
   ),
+  const SwitchModel(
+    title: '手动切集后显示播放控件',
+    subtitle: '点击上一集、下一集或分集列表切换后保持控件显示',
+    leading: Icon(Icons.touch_app_outlined),
+    setKey: SettingBoxKey.showControlsOnManualEpisodeChange,
+    defaultVal: false,
+  ),
   if (PlatformUtils.isMobile)
-    const SwitchModel(
+    SwitchModel(
       title: '后台播放',
       subtitle: '进入后台时继续播放',
-      leading: Icon(Icons.motion_photos_pause_outlined),
+      leading: const Icon(Icons.motion_photos_pause_outlined),
       setKey: SettingBoxKey.continuePlayInBackground,
       defaultVal: false,
+      onChanged: (value) {
+        if (!value) {
+          PlPlayerController.instance?.onAutoAudioOnlySettingChanged();
+        }
+      },
+    ),
+  if (PlatformUtils.isMobile)
+    SwitchModel(
+      title: '后台只听音频（实验性）',
+      subtitle: '需开启「后台播放」后才生效\n进入后台或息屏一段时间后停止视频流，只保留声音；回到前台恢复画面',
+      leading: const Icon(Icons.headphones_outlined),
+      setKey: SettingBoxKey.autoAudioOnlyInBackground,
+      defaultVal: false,
+      onChanged: (value) {
+        PlPlayerController.instance?.onAutoAudioOnlySettingChanged();
+      },
     ),
   const SwitchModel(
     title: '应用内画中画',
@@ -234,19 +408,24 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableInAppPip,
     defaultVal: true,
   ),
-  if (Platform.isAndroid) ...[
+  if ((Platform.isAndroid && PiliAndroidHelper.isPipAvailable) ||
+      (Platform.isIOS && IOSPipHelper.isAvailable))
     SwitchModel(
       title: '后台画中画',
       subtitle: '进入后台时以小窗形式（PiP）播放',
       leading: const Icon(Icons.picture_in_picture_outlined),
       setKey: SettingBoxKey.autoPiP,
       defaultVal: false,
-      onChanged: (val) {
-        if (val && !videoPlayerServiceHandler!.enableBackgroundPlay) {
-          SmartDialog.showToast('建议开启后台音频服务');
-        }
-      },
+      onChanged: Platform.isAndroid
+          ? (val) {
+              if (val && !videoPlayerServiceHandler!.enableBackgroundPlay) {
+                SmartDialog.showToast('建议开启后台音频服务');
+              }
+            }
+          : null,
     ),
+  // PiP on iOS only shows the video frames, without danmaku.
+  if (Platform.isAndroid)
     const SwitchModel(
       title: '应用内小窗转后台画中画（实验性）',
       subtitle: '实验性功能：应用内小窗存在时，退到后台自动切换为系统 PiP；可能因系统差异出现异常',
@@ -254,6 +433,7 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.enableInAppPipToSystemPip,
       defaultVal: true,
     ),
+  if (Platform.isAndroid)
     const SwitchModel(
       title: '画中画不加载弹幕',
       subtitle: '当弹幕开关开启时，小窗屏蔽弹幕以获得较好的体验',
@@ -261,7 +441,6 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.pipNoDanmaku,
       defaultVal: false,
     ),
-  ],
   const SwitchModel(
     title: '全屏手势反向',
     subtitle: '默认播放器中部向上滑动进入全屏，向下退出\n开启后向下全屏，向上退出',
@@ -282,17 +461,27 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableOnlineTotal,
     defaultVal: false,
   ),
+  const SwitchModel(
+    title: '弹幕数',
+    subtitle: '展示当前播放视频的具体弹幕数',
+    leading: Icon(CustomIcons.dm_on),
+    setKey: SettingBoxKey.enableDmCount,
+    defaultVal: false,
+  ),
   NormalModel(
     title: '默认全屏方向',
     leading: const Icon(Icons.open_with_outlined),
     getSubtitle: () => '当前全屏方向：${Pref.fullScreenMode.desc}',
     onTap: _showFullScreenModeDialog,
   ),
-  NormalModel(
+  PopupModel(
     title: '底部进度条展示',
     leading: const Icon(Icons.border_bottom_outlined),
-    getSubtitle: () => '当前展示方式：${Pref.btmProgressBehavior.desc}',
-    onTap: _showProgressBehaviorDialog,
+    value: () => Pref.btmProgressBehavior,
+    items: BtmProgressBehavior.values,
+    onSelected: (value, setState) => GStorage.setting
+        .put(SettingBoxKey.btmProgressBehavior, value.index)
+        .whenComplete(setState),
   ),
   if (PlatformUtils.isMobile)
     SwitchModel(
@@ -321,6 +510,7 @@ List<SettingsModel> get playSettings => [
     defaultVal: false,
   ),
 ];
+
 
 Future<void> _showSubtitleDialog(
   BuildContext context,
@@ -361,24 +551,6 @@ Future<void> _showSuperChatTimeDialog(
   }
 }
 
-Future<void> _showSuperChatDialog(
-  BuildContext context,
-  VoidCallback setState,
-) async {
-  final res = await showDialog<SuperChatType>(
-    context: context,
-    builder: (context) => SelectDialog<SuperChatType>(
-      title: 'SuperChat (醒目留言) 显示类型',
-      value: Pref.superChatType,
-      values: SuperChatType.values.map((e) => (e, e.title)).toList(),
-    ),
-  );
-  if (res != null) {
-    await GStorage.setting.put(SettingBoxKey.superChatType, res.index);
-    setState();
-  }
-}
-
 Future<void> _showFullScreenModeDialog(
   BuildContext context,
   VoidCallback setState,
@@ -397,27 +569,6 @@ Future<void> _showFullScreenModeDialog(
   }
 }
 
-Future<void> _showProgressBehaviorDialog(
-  BuildContext context,
-  VoidCallback setState,
-) async {
-  final res = await showDialog<BtmProgressBehavior>(
-    context: context,
-    builder: (context) => SelectDialog<BtmProgressBehavior>(
-      title: '底部进度条展示',
-      value: Pref.btmProgressBehavior,
-      values: BtmProgressBehavior.values.map((e) => (e, e.desc)).toList(),
-    ),
-  );
-  if (res != null) {
-    await GStorage.setting.put(
-      SettingBoxKey.btmProgressBehavior,
-      res.index,
-    );
-    setState();
-  }
-}
-
 Future<void> _showAngleDegreesDialog(
   BuildContext context,
   VoidCallback setState,
@@ -425,7 +576,7 @@ Future<void> _showAngleDegreesDialog(
   final res = await showDialog<double>(
     context: context,
     builder: (context) => SliderDialog(
-      title: '倾斜角度阈值',
+      title: const Text('倾斜角度阈值'),
       min: 10.0,
       max: 90.0,
       divisions: 90,
@@ -437,5 +588,183 @@ Future<void> _showAngleDegreesDialog(
   if (res != null) {
     await GStorage.setting.put(SettingBoxKey.angleDegrees, res.toInt());
     setState();
+  }
+}
+
+Future<void> showPlayerVolumeDialog(
+  BuildContext context,
+  VoidCallback setState, {
+  ValueChanged<double>? onChanged,
+}) {
+  return showVolumeDialog(
+    context,
+    title: const Text('播放器音量'),
+    value: Pref.playerVolume,
+    onChanged: (value) => GStorage.setting
+        .put(SettingBoxKey.playerVolume, value)
+        .whenComplete(() {
+          setState();
+          onChanged?.call(value);
+        }),
+  );
+}
+
+Future<void> _showMaxVolumeDialog(
+  BuildContext context,
+  VoidCallback setState,
+) {
+  return showVolumeDialog(
+    context,
+    title: const Text('最高音量'),
+    value: Pref.maxVolume * 100,
+    onChanged: (rawValue) {
+      final maxVolume = (rawValue / 100).toPrecision(2);
+      if (Pref.desktopVolume > maxVolume) {
+        GStorage.setting.put(SettingBoxKey.desktopVolume, maxVolume);
+      }
+      GStorage.setting
+          .put(SettingBoxKey.maxVolume, maxVolume)
+          .whenComplete(setState);
+    },
+  );
+}
+
+const kMinVolume = 100.0;
+const kMaxVolume = 300.0;
+
+Future<void> showVolumeDialog(
+  BuildContext context, {
+  required Widget title,
+  required double value,
+  required ValueChanged<double> onChanged,
+}) async {
+  final res = await showDialog<double>(
+    context: context,
+    builder: (context) => SliderDialog(
+      title: title,
+      min: kMinVolume,
+      max: kMaxVolume,
+      divisions: 40,
+      precise: 0,
+      value: value,
+      suffix: '%',
+    ),
+  );
+  if (res != null) {
+    onChanged(res);
+  }
+}
+
+Future<void> _showSuperResolutionDialog(
+  BuildContext context,
+  VoidCallback setState,
+) async {
+  final res = await showDialog<SuperResolutionType>(
+    context: context,
+    builder: (context) => SelectDialog<SuperResolutionType>(
+      title: '超分辨率',
+      value: Pref.superResolutionType,
+      values: SuperResolutionType.values.map((e) => (e, e.label)).toList(),
+    ),
+  );
+  if (res != null) {
+    await GStorage.setting.put(
+      SettingBoxKey.superResolutionType,
+      res.index,
+    );
+    setState();
+  }
+}
+
+Future<void> audioNormalization(
+  BuildContext context,
+  VoidCallback setState, {
+  bool fallback = false,
+}) async {
+  final key = fallback
+      ? SettingBoxKey.fallbackNormalization
+      : SettingBoxKey.audioNormalization;
+  final res = await showDialog<String>(
+    context: context,
+    builder: (context) {
+      String audioNormalization = fallback
+          ? Pref.fallbackNormalization
+          : Pref.audioNormalization;
+      Set<String> values = {
+        '0',
+        '1',
+        if (!fallback) '2',
+        audioNormalization,
+        '3',
+      };
+      return SelectDialog<String>(
+        title: fallback ? '服务器无loudnorm配置时使用' : '音量均衡',
+        toggleable: true,
+        value: audioNormalization,
+        values: values
+            .map(
+              (e) => (
+                e,
+                switch (e) {
+                  '0' => AudioNormalization.disable.title,
+                  '1' => AudioNormalization.dynaudnorm.title,
+                  '2' => AudioNormalization.loudnorm.title,
+                  '3' => AudioNormalization.custom.title,
+                  _ => e,
+                },
+              ),
+            )
+            .toList(),
+      );
+    },
+  );
+  if (res != null && context.mounted) {
+    if (res == '3') {
+      String param = '';
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('自定义参数'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 16,
+            children: [
+              const Text('等同于 --lavfi-complex="[aid1] 参数 [ao]"'),
+              TextField(
+                autofocus: true,
+                onChanged: (value) => param = value,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: Get.back,
+              child: Text(
+                '取消',
+                style: TextStyle(color: ColorScheme.of(context).outline),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Get.back();
+                GStorage.setting.put(key, param);
+                if (!fallback &&
+                    AudioNormalization.loudnormRegExp.hasMatch(param)) {
+                  audioNormalization(context, setState, fallback: true);
+                }
+                setState();
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      GStorage.setting.put(key, res);
+      if (res == '2') {
+        audioNormalization(context, setState, fallback: true);
+      }
+      setState();
+    }
   }
 }
