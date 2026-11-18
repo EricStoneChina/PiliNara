@@ -145,17 +145,17 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: |
+          script: >-
             bash -euo pipefail -c '
-              apk=smoke-package/PiliNara_android_debug_all.apk
-              analyzer=$(find "$ANDROID_HOME/cmdline-tools" -path "*/bin/apkanalyzer" | sort -V | tail -1)
-              package=$("$analyzer" manifest application-id "$apk")
-              printf "APK package: %s\n" "$package"
-              adb install -g "$apk"
-              launch=$(adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$package")
-              printf "%s\n" "$launch"
-              grep -F "Status: ok" <<<"$launch"
-              sleep 15
-              adb shell pidof "$package"
-              adb shell dumpsys activity activities | grep -E "(mResumedActivity|topResumedActivity)" | grep -F "$package/"
+            apk=smoke-package/PiliNara_android_debug_all.apk;
+            analyzer=$(find "$ANDROID_HOME/cmdline-tools" -path "*/bin/apkanalyzer" | sort -V | tail -1);
+            package=$("$analyzer" manifest application-id "$apk");
+            printf "APK package: %s\n" "$package";
+            adb install -g "$apk";
+            launch=$(adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$package");
+            printf "%s\n" "$launch";
+            grep -F "Status: ok" <<<"$launch";
+            sleep 15;
+            adb shell pidof "$package";
+            adb shell dumpsys activity activities | grep -E "(mResumedActivity|topResumedActivity)" | grep -F "$package/"
             '
